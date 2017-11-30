@@ -1,0 +1,3161 @@
+; INV (c)Erik Mooney 1997
+; v. 2.1 (c)Piero Cavina Jan 1998
+; Final version of INV+ (c) Erik Mooney 2004
+
+    processor 6502
+
+    include vcs2600.h   ;
+    org $F000           ;
+
+;------------------------------------------------------Game control variables
+CurrentWave = $80   ;start at 0
+Scanline = $81
+
+
+CurrMissile = $82   ;keep track of whether this frame uses missile 0 or 1
+MissileY = $83      ;Start of missile to be displayed on current frame.
+
+Saucer = $84        ;Saucer data.                
+
+SaucerPos = $85 ;pc
+SaucerPosFC = $86 ;pc
+
+Framec = $87 ;pc    ;for timing control - flip lowest bit every other frame - used for fx and saucer
+                    ;flip bit 4 every time we make invader marching fx to alternate high and low pitch
+
+PauseTimer = $88
+WhichPlayerDied = $89   ;Bit 0 set if in P0's death sequence, Bit 1 set if in P1's death sequence,
+                        ;No bits set if in another pause sequence (ie, board start)
+
+invhit = $8A ;pc
+shldhitbyMissile = $8B ;pc
+shldhitbyBomb = $8C
+
+SelectPressed = $8D ;1 if Select was pressed last frame
+CurrentGame = $8E   ;current game variation, starts at 0
+GameOver = $8F      ;bit 3 set = game over
+
+;-----------------------------------------------------------------Player data
+
+Player0Pos = $90    ;player 0 position (position of leftmost pixel of player,
+                    ;  =1 at leftmost pixel of screen, minimum 11, max 142)
+Player0PosFC = $91
+Player0MX = $92     ;player 0 missile X (=Player0Pos+3 when fired)
+                    ;  =0 when inactive
+Player0MY = $93     ;player 0 missile Y (Scanline at which we turn on
+                    ;  missile)
+Player0Lives = $94  ;EXcluding current life ( -1=not currently playing)
+Player0Score = $95  ;Three bytes, each holding one digit.  (Dummy Zero)
+                         
+Player1Pos = $98    ;
+Player1PosFC = $99
+Player1MX = $9A     ;
+Player1MY = $9B     ;
+Player1Lives = $9C  ;
+Player1Score = $9D  ;
+
+;------------------------------------------------------------other misc stuff
+
+
+Shields = $A0       ;shield patterns are stored here.
+
+Player0ShotCount = $B0   ;Count shots for saucer score.  Starts at -1 on each board (first shot increments it to 0), 
+Player1ShotCount = $B8   ;increments to 22, when it reaches 23 we reset it to 8.
+
+Player0MS = $B1     ;I have no idea what this does anymore
+Player1MS = $B2
+
+SaucerTime = $B3    ;25 seconds between saucers.  We reset this 16-bit number to 25 * 60 = 1500 (decimal) whenever
+SaucerTimeHi = $B4  ;a board starts or the saucer appears.
+
+                    ;If SaucerTimeHi = $C0, it is a signal that SaucerTime is being used as a 3-second delay to
+                    ;draw the saucer score.
+
+EnemyBombsX = $B5   ;Two bytes for X-position (not FC_X)
+
+;fx0: player firing noise
+;fx1: invaders marching, saucer moving, invaders and saucer exploding
+
+fx0 = $B7 ;pc
+fx1 = $B9 ;pc
+
+Player0Ptr = $BA    ;16-bit pointer to player graphic for this frame (used to animate explosion)
+Player1Ptr = $BC
+
+
+ColorIndex = $BE    ;Offset into the colors table.  For now (and it'll likely stay this way), it's 0 for NTSC
+                    ;and 1 for PAL.
+
+VideoMode = $BF     ;Bit 0: 1 = NTSC colors  0 = PAL colors
+                    ;Bit 1: 0 = NTSC timing  1 = PAL timing
+                    ;Start this at 1 upon bootup (NTSC-60), increment to 2 (PAL-50) then to 0 (PAL-60)
+                    ;Top bit indicates if B/W switch is currently down.  If that changes from 1 to 0, change video mode
+
+SaucerPoints = $C0  ;Holds 1,2,3, or 4 when we are using the saucer sprite to display a points value
+
+ScoreBytes = $C1    ;Scores are displayed from here.
+
+ScoreTemp = $FA     ;Scores are calculated into here.
+
+
+;-----------------------------------------------------Data for invader stuff.
+
+InvLeft = $C5       ;Invaders left on current board
+
+BombDelay = $C6     ;Frames until we try to shoot again.
+
+ModOffset = $C7     ;Offset into ptable.  Starts at FrameCount*12 for
+                    ;each frame, adds 72 on rows 3 and 1.
+
+TopLine = $C8       ;Line on which to end top-screen loop.  Actually 5
+                    ;scanlines before invader formation starts.
+FramesLeft = $C9    ;This is the number of frames left before we advance the
+                    ;  invaders.
+CurrColor = $CA     ;Starts at 4 each frame, decrements to MinColor.
+MinColor = $CB      ;When CurrColor = MinColor, this is the last row of
+                    ;  invaders.
+ModRow = $CC        ;Actually used to modify rows - goes 2-1-1-0-0.
+ModRow2 = $CD       ;Used for which line of the row gets modified.
+                    ;Goes 4-3-2-1-0.
+Direction = $CE     ;0 = moving to right, 1 = moving to left
+FrameCount = $CF    ;counts from 0 to 5 for each full-position cycle
+                    ;of invader movements.
+
+Invaders = $D0      ;5 rows of 8 bytes each, representing the six
+                    ;playfield registers verbatim.
+                    ;Locations $x6,$x7,$xE,$xF are available for other things.
+
+Temp1 = $D6         ;Temp variables
+Temp2 = $D7         ;
+Temp3 = $DE         ;
+Temp4 = $DF         ;
+
+Rand1 = $E6         ;Numbers for rand# generator
+Rand2 = $E7
+Rand3 = $EE
+Rand4 = $EF
+
+EnemyBombs = $F6    ;Two bytes for Y-end, two bytes for FC_X.
+
+;=======================================================================
+;Start of code at powerup - init registers, RAM
+;=======================================================================
+Start                   ;
+    SEI             ;Disable interrupts, if there are any.
+    CLD             ;Clear BCD math bit.
+
+    LDX  #$FF       ;
+    TXS             ;Set stack to top of RAM.
+    LDA #0          ;Zero everything.
+B1  STA 0,X         ;
+    DEX             ;
+    BNE B1          ;
+    ;LDA #$00        ;
+    ;STA SWACNT      ;set data direction registers to input
+    ;STA SWBCNT      ;redundant
+
+    ;lda #0
+    ;sta CurrentGame ;redundant
+    inc VideoMode
+
+    JSR GameInit    ;
+    lda #8
+    sta Rand1
+    sta Rand2       ;can get away without initing all 4 random seeds - saves 6 bytes
+
+    STA GameOver    ;
+
+
+;=========================================================================
+;Main Loop - call each procedure
+;=========================================================================
+
+
+MainLoop                ;
+    ;JSR  VerticalBlank ;Execute the vertical blank.
+    ;JSR  CheckSwitches ;Check console switches.
+    ;JSR  GameCalc      ;Do calculations during Vblank
+    ;JSR  DoMissiles
+    ;JSR  DrawScreen    ;Draw the screen
+;    JSR  OverScan      ;Do more calculations during overscan
+
+;=========================================================================
+;Vertical Blank - do vertical sync
+;=========================================================================
+
+VerticalBlank       ;Beginning of the frame - at the end of overscan.
+    LDA  #2         ;VBLANK was set at the beginning of overscan.
+    STA  WSYNC      ;
+    STA  VSYNC      ;Begin vertical sync.
+    STA  WSYNC      ;First line of VSYNC
+    STA  WSYNC      ;Second line of VSYNC.
+    LDA #41         ;Set timer to expire on scanline -4.
+    STA TIM64T      ;
+    LDA #0          ;
+    STA  WSYNC      ;Third line of VSYNC.
+    STA  VSYNC      ;Writing zero to VSYNC ends vertical sync period.
+    ;RTS                 ;
+
+;=========================================================================
+;Check Switches - read console switches, move players
+;=========================================================================
+
+CheckSwitches           ;
+
+    ldy #0              ;save time later by keeping 0 in Y to store whenever we need
+
+;-------------------------------------------------------check Select
+    LDA SWCHB           ;check console switches
+    sta Temp1           ;
+    and #$02            ;check Select
+    bne NoSelect        ;branch if not pressed
+
+    lda SelectPressed   ;if Select was pressed last frame, don't select again
+    bne EndSelect       ;
+                        ;
+    inc CurrentGame     ;
+    lda #8              ;
+    sta GameOver        ;
+    lda #1
+    sta SelectPressed   ;
+    jmp Reset           ;don't check reset - init new game always if Select
+                        ;is pressed
+
+NoSelect                ;
+    sty SelectPressed   ;
+
+EndSelect
+;-------------------------------------------------------check Reset
+
+    lda Temp1           ;
+    AND #$01            ;only care about bit 0 - reset
+    BEQ Reset           ;was it pressed?
+
+    lda GameOver        ;now also check for fire button initing new game
+    beq NoReset         ;but not if game is already in progress
+    
+    lda PauseTimer
+    bne NoReset         ;and do not reset on fire button if we are pausing (this will only happen if invaders reach earth)
+    
+    lda INPT4           ;read trigger 0
+    bmi NoReset
+
+Reset
+    sty GameOver        ;
+                      ;
+    JSR GameInit        ;yes (0), init new game
+    
+NoReset
+
+;-------------------------------------------------------check Color/BW
+
+    lda Temp1
+    AND #%00001000
+    bne SwitchIsColor
+    
+    lda VideoMode       ;if switch is on B/W, just set the bit in VideoMode that indicates that
+    ora #%10000000
+    sta VideoMode
+    jmp DoneVideoMode
+    
+SwitchIsColor
+    bit VideoMode
+    bpl DoneVideoMode   ;switch was already on color and is still on color, do nothing
+    
+    lda VideoMode       ;change the video mode!
+    and #%00000011
+    clc
+    adc #1
+    cmp #3              ;increment it, if it has become 3 reset it to 0 instead
+    bne NoDrop$
+    lda #0
+NoDrop$
+    sta VideoMode       ;top bit was already zeroed by the most recent AND
+    
+DoneVideoMode
+
+    lda VideoMode
+    and #%00000001
+    eor #$01            ;trust me, this works; take only the bottom bit of Video Mode, flip it, and you've got ColorIndex
+    sta ColorIndex
+
+    lda Player0MS
+    bne NoAdjustColor   ;do not adjust ColorIndex for invisibility if a missile is exploding
+    lda Player1MS
+    bne NoAdjustColor
+    lda PauseTimer
+    beq AdjustColor     ;if not pausing, always adjust color
+    lda WhichPlayerDied
+    bne NoAdjustColor   ;if pausing, only if one of the players is dying do we adjust the color
+
+AdjustColor
+    lda CurrentGame     ;also adjust ColorIndex for invisible invaders
+    and #%00000010
+    ora ColorIndex
+    sta ColorIndex
+NoAdjustColor
+
+;=======================================================Move Players
+
+    lda GameOver
+    bne DontMove        ;If game not playing or game pausing, don't move
+    
+    lda PauseTimer
+    bne DontMove
+
+;-------------------------------------------------------move Player 0
+
+    lda SWCHA       ;Joystick 0
+    sta Temp1       ;
+
+    bit Player0Lives
+    bmi J1
+
+    lda Temp1
+    bmi J0          ;if bit 7 set, "right" not pressed
+    lda Player0Pos  ;
+    cmp #141        ;
+    beq J0          ;if pos=141 he's all the way on the right
+    inc Player0Pos  ;
+J0                  ;
+    lda #$40        ;
+    and Temp1       ;checking bit 6 for "left"
+    bne J1          ;if bit 6 set, "right" not pressed
+    lda Player0Pos  ;
+    cmp #12         ;
+    beq J1          ;if pos=12, he's all the way on the left
+    dec Player0Pos  ;
+J1                  ;
+
+;-------------------------------------------------------move Player 1
+
+    lda Player1Lives
+    bmi J3
+
+    lda #$08        ;joystick 1
+    and Temp1       ;
+    bne J2          ;if bit 7 set, "right" not pressed
+    lda Player1Pos  ;
+    cmp #141        ;
+    beq J2          ;if pos=141, he's all the way on the right
+    inc Player1Pos  ;
+J2                  ;
+    lda #$04        ;
+    and Temp1       ;checking bit 6 for "left"
+    bne J3          ;if bit 6 set, "right" not pressed
+    lda Player1Pos  ;
+    cmp #12         ;
+    beq J3          ;if pos=12, he's all the way on the left
+    dec Player1Pos  ;
+J3                  ;
+
+DontMove            ;
+
+    ;RTS             ;
+
+;=========================================================================
+;Game Calculations - the meat of the code
+;=========================================================================
+
+GameCalc                ;
+
+;fx0 - nothing but invaders marching - my code!
+;audio channel 0 also used for saucer siren - other code later hits audf0/audv0
+
+    LDA fx0
+    and #%00001111
+    BEQ nofx0
+    
+    dec fx0
+    
+    lda Framec
+    ora #%00010011
+    STA AUDF0
+
+    LDA #6
+    STA AUDC0
+    lda #9
+nofx0:
+    STA AUDV0
+
+;piero's code: 
+;$42 stored to fx1 on saucer hit
+;$52 stored to fx1 on invader hit
+;$38 stored to fx1 on player shoot
+
+    LDA fx1
+    BIT Memory0F
+    BEQ nofx1
+
+    AND #%00110000
+    CMP #%00110000
+    BNE NotPlayerShoot
+
+    lda Framec
+    and #1
+    beq DoneFX1
+
+    DEC fx1
+    LDA fx1
+    LSR
+    LSR
+    LSR
+    LSR
+    STA AUDC1
+    LDA fx1
+    AND #%00001111
+    STA AUDV1
+    ADC #3
+    JMP FinFX1
+
+NotPlayerShoot
+    INC fx1
+    LDA fx1
+    LSR
+    LSR
+    LSR
+    LSR
+    STA AUDC1
+    LDX #0
+    LDA Framec
+    AND #1
+    BNE nxx
+    LDX #$0C
+nxx:
+    STX Temp1
+    LDA fx1
+nofx1:
+    STA AUDV1
+    EOR Temp1
+    adc #1
+FinFX1
+    STA AUDF1
+    
+DoneFX1
+
+    lda Framec 
+    eor #$01
+    sta Framec
+
+
+;------------------------------------------ Handle player death sequence
+
+    LDA PauseTimer
+    BEQ ExitPlayerDeath
+
+    DEC PauseTimer              ;if we are in death sequence, decrement timer
+
+    LDX WhichPlayerDied         
+    BEQ ExitPlayerDeath         ;If zero, neither player died, meaning this is a between-waves pause so don't do noise
+
+    sbc #63                     ;PauseTimer starts at 180 (three seconds.)  Ramp volume down from full
+    bmi NoNoiseNow              ;(180 - 63 = 127, shifted right 3x = 31) during the first 2/3 of the pause interval.
+    lsr                         ;No noise during last 63 frames of pause interval.
+    lsr
+    lsr
+    sta AUDV1                   ;decrease volume during pause timer
+    lda #8
+    sta AUDC1                   ;make some noize!
+    lda #$07
+    sta AUDF1
+
+NoNoiseNow    
+    LDA PauseTimer
+    BEQ FinishDeathSequence     ;if PauseTimer hit zero, then the death sequence has finished
+    
+    CMP #60                     ;if we get here, a death is in progress
+    BPL StillExploding          ;if dying, but not in the last 60 frames of the pause, animate explosion
+
+    txa                         ;if dying in the last 60 frames of the pause, blank player
+    lsr                         ;X still had WhichPlayerDied ($01 if P0 died, $10 if P1 died)
+    asl                         ;convert that to an offset for Player0Ptr (A now is 2 if P1, 0 if P0)
+    tax
+   
+    lda #<playerpictblank        ;high byte of the 16-bit pointer is always the same, just change low byte
+    sta Player0Ptr,X
+    jmp ExitPlayerDeath
+        
+StillExploding
+
+    txa                         ;X still had WhichPlayerDied ($01 if P0 died, $10 if P1 died)
+    and #%00000010              ;convert that to an offset for Player0Ptr (A now is 2 if P1, 0 if P0)
+    tax
+    
+    LDA PauseTimer              
+    and #%00000100         ;animate explosion every 4 frames by using bit 2 of PauseTimer
+                           ;A is now 0 or 4, for playerexpl1 or playerexpl2
+    sta Temp1
+    lsr
+    clc
+    adc Temp1              ;now it's 0 or 6
+    
+    adc #<playerexpl1      ;now it's playerexpl1 or playerexpl2
+    sta Player0Ptr,X
+    
+    JMP ExitPlayerDeath          
+    
+FinishDeathSequence             ;if we get here, a player just finished his death sequence, so reset some game state
+    TXA                         ;X had WhichPlayerDied
+    LSR                         ;this sticks WhichPlayerDied into the carry (did I think of this or did Piero?)
+
+    LDY #<playerpict            ;to reset the graphics pointer for the player
+
+    lda #0
+    sta EnemyBombs
+    sta EnemyBombs+2
+
+    BCS Player0Died             ;the carry was set, ultimately from WhichPlayerDied
+
+    DEC Player1Lives            ;if we get here, player 1 died
+    LDA #141
+    STA Player1Pos
+    STY Player1Ptr              ;reset P1 graphics pointer
+    JMP FinishUp
+    
+Player0Died
+    DEC Player0Lives
+    BPL NotGameOverP0
+
+    LDA #<playerpictblank       ;check added 4/30/04 - turn off P0's graphics entirely so his corpse doesn't obscure P1
+    STA Player0Ptr
+    jmp FinishUp
+        
+NotGameOverP0    
+    LDA #12
+    STA Player0Pos
+    STY Player0Ptr              ;reset P0 graphics pointer
+
+FinishUp
+    LDA Player0Lives
+    BPL ExitPlayerDeath
+    LDA Player1Lives
+    BPL ExitPlayerDeath
+    LDA #8
+    STA GameOver
+
+    
+;   BEQ noplexp
+;   LDA plhit
+;   SEC
+;   SBC #3
+;   AND #%00111110
+;   STA plhit
+;   STA COLUBK
+;   STA AUDV0
+;   ASL
+;   ASL
+;   STA AUDF0
+;
+;   LDA #$88
+;   STA AUDC0
+
+ExitPlayerDeath
+
+
+;--------------------------------------------------------------------Handle Saucer
+
+    lda Saucer
+    bne saucering       ;saucer already in progress
+    
+    DEC SaucerTime      ;decrement time left until saucer appears
+    LDA SaucerTime
+    CMP #$FF
+    bne nosaucering     ;if low byte didn't just drop below 0, of course we're not doing a saucer
+    DEC SaucerTimeHi    ;if low byte dropped below 0, decrement high byte as well
+    bpl nosaucering     ;if high byte dropped below 0, start a saucer
+
+    LDA InvLeft
+    CMP #9
+    BMI nosaucering     ;But once fewer than 9 out of 55 invaders remain, no UFOs until the next screen
+
+; init saucer
+    
+    lda #<1500           ;1500 is 25 * 60 which is time between saucers
+    sta SaucerTime
+    lda #>1500
+    sta SaucerTimeHi
+
+    LDX #$FF ;pc
+    LDY #140
+    JSR RandomBit
+    LDA Rand1
+    AND #1
+    BNE otherdir
+    INX
+    INX
+    LDY #4
+otherdir
+    STX Saucer          ;-1 if moving from the right, 1 if moving from the left
+    STY SaucerPos
+
+saucering:
+    lda SaucerTimeHi
+    cmp #$C0
+    bne NotShowingPoints
+            
+    dec SaucerTime      ;if we get here, currently there are points being displayed in the saucer's place.
+    bne nosaucering     ;just skip on out
+
+    lda #<1320          ;if we get here, remove the points display by resetting SaucerTime
+    sta SaucerTime      ;1320 frames is 22 seconds till next saucer
+    lda #>1320
+    sta SaucerTimeHi
+    jmp endsaucering
+
+NotShowingPoints
+
+    lda Framec          ;only move saucer every other frame
+    and #01
+    bne nosaucering
+    
+    lda SaucerTimeHi    ;don't move saucer if we're displaying it as points instead
+    cmp #$C0
+    beq nosaucering
+
+    LDA SaucerPos ;pc
+    CLC
+    ADC Saucer
+    STA SaucerPos
+
+    ldy GameOver
+    bne NoSaucerSound
+
+    and #%00000111
+    sta AUDF0
+    lda #$44
+    sta AUDC0
+    sta AUDV0
+NoSaucerSound
+
+    lda SaucerPos
+    CMP #144 ;pc
+    BCS endsaucering ;pc
+    CMP #4
+    BCS nosaucering
+
+endsaucering:
+    LDA #0 ;pc
+    STA Saucer ;pc 
+    ;STA AUDV1           ;hack to fix audio continuing when saucer leaves screen during game over mode
+
+nosaucering:
+
+
+;--------------------------------------------------------Move the invaders
+
+    LDA #4              ;
+    STA CurrColor       ;
+
+    lda GameOver
+    beq MI0             ;if game over or player dying, don't move invaders
+    jmp DoneMove
+    
+MI0 lda PauseTimer
+    beq MI1
+    jmp DoneMove        ;and if in pause state (PauseTimer not zero), don't move
+
+MI1 lda FramesLeft
+    sec
+    sbc #2
+    sta FramesLeft
+
+    beq MV0             ;if zero, move the invaders
+
+    cmp #1
+    beq L2
+    jmp DoneMove        ;Don't move the invaders if we don't need to
+
+L2                      ;Here, we want to change FrameCount but not move
+                        ;any invaders.  We also want to reinit FramesLeft.
+    ldx #1
+    lda Direction
+    beq MV1
+    ldx #$FF            ;X has 1 if moving right or -1 if moving left
+MV1 stx Temp2
+    lda FrameCount
+    clc
+    adc Temp2
+
+    bpl FC2             ;if negative, make it equal 5
+    lda #5
+FC2 cmp #6              ;if 6, make it equal 0
+    bne FC3
+    lda #0
+FC3 sta FrameCount
+
+    ldy InvLeft
+    lda [advancetable],Y
+    sta FramesLeft
+
+    jmp DoneMove
+
+MV0
+    lda Framec          ;set up invader marching sound effect
+    eor #%00000100
+    sta Framec
+    lda InvLeft         ;cap the duration of the sound effect if there are few invaders left
+    clc
+    adc #1
+    lsr
+    cmp #9
+    bmi Cap
+    lda #9
+Cap   
+    sta fx0
+
+    ldy InvLeft
+    ldx [advancetable],Y
+    inx
+    stx FramesLeft
+
+    ldx #0              ;for later, to simplify the branching
+
+;-------------------------------------------------Move the invaders right
+
+    lda Direction       ;Branch to alternate code if the invaders are moving
+    bne MovingLeft      ;left
+
+    lda #0              ;Here we check to see if any invader is occupying
+    ora Invaders+5      ;the rightmost column.  If so, we move them down
+    ora Invaders+13     ;and reverse direction
+    ora Invaders+21     ;
+    ora Invaders+29     ;
+    ora Invaders+37     ;
+    and #$80            ;
+    beq MoveEachRow0    ;if nobody's in the right column, go ahead and move
+
+    sta Direction       ;set direction = left
+
+    lda TopLine         ;going dooown...
+    clc
+    adc #6
+    sta TopLine
+
+    jmp DoneMove        ;
+                        ;
+MoveEachRow0            ;
+    clc                 ;
+    lda Invaders,X      ;get leftmost byte
+    asl                 ;move them one to the right
+    sta Invaders,X      ;
+    lda Invaders+1,X    ;get second byte (76543210)
+    ror                 ;
+    sta Invaders+1,X    ;
+    lda Invaders+2,X    ;
+    rol                 ;
+    sta Invaders+2,X    ;We've gotta get the carry into bit 3 of A
+    lda #0              ;
+    rol                 ;
+    rol                 ;
+    rol                 ;
+    rol                 ;
+    ora Invaders+3,X    ;
+    rol                 ;
+    sta Invaders+3,X    ;
+    lda Invaders+4,X    ;
+    ror                 ;
+    sta Invaders+4,X    ;
+    lda Invaders+5,X    ;
+    rol                 ;
+    sta Invaders+5,X    ;
+
+    clc                 ;
+    txa                 ;
+    adc #8              ;add 8 to do each row
+    tax                 ;
+
+    cpx #40             ;
+    bne MoveEachRow0    ;
+
+    lda FrameCount
+    clc
+    adc #01
+    cmp #6
+    bne FC0
+    lda #0
+FC0 sta FrameCount
+
+    jmp DoneMove        ;
+
+;-------------------------------------------------Move the invaders left
+
+MovingLeft              ;
+    lda #0              ;Here we check to see if any invader is occupying
+    ora Invaders        ;the left column.  If so, we move them down
+    ora Invaders+8      ;and reverse direction
+    ora Invaders+16     ;
+    ora Invaders+24     ;
+    ora Invaders+32     ;
+    and #$10            ;
+    beq MoveEachRow1    ;if nobody's in the left column, go ahead and move
+
+    lda #0              ;
+    sta Direction       ;
+
+    lda TopLine         ;going dooown...
+    clc
+    adc #6
+    sta TopLine
+
+    jmp DoneMove        ;
+
+MoveEachRow1            ;
+    lda Invaders+5,X    ;
+    lsr                 ;
+    sta Invaders+5,X    ;
+    lda Invaders+4,X    ;
+    rol                 ;
+    sta Invaders+4,X    ;
+    lda Invaders+3,X    ;
+    ror                 ;
+    tay                 ;
+    and #$f0            ;
+    sta Invaders+3,X    ;
+    tya                 ;
+    ror                 ;
+    ror                 ;
+    ror                 ;if there was someone in bit 3 of fourth invader
+    ror                 ;byte, he goes into the carry here
+    lda Invaders+2,X    ;
+    ror                 ;
+    sta Invaders+2,X    ;
+    lda Invaders+1,X    ;
+    rol                 ;
+    sta Invaders+1,X    ;
+    lda Invaders,X      ;
+    ror                 ;
+    sta Invaders,X      ;
+
+    clc                 ;
+    txa                 ;
+    adc #8              ;add 8 to do next row
+    tax                 ;
+
+    cpx #40             ;
+    bne MoveEachRow1    ;
+
+    lda FrameCount
+    sec
+    sbc #1
+    bpl FC1
+    lda #5
+FC1 sta FrameCount
+
+;------------------------------------------------------Set Player 0 position
+
+DoneMove                ;We position the players right before drawing them, 
+    lda Player0Pos      ;during DrawScreen, so we want to set the FC values
+    jsr Hconvert        ;here.
+    sta Player0PosFC    
+
+;------------------------------------------------------Set Player 1 Position
+
+    lda Player1Pos      ;Now we do the same for player 1.
+    jsr Hconvert
+    sta Player1PosFC
+
+    LDA SaucerPos ;pc
+    jsr Hconvert  ;pc
+    sta SaucerPosFC ;pc
+
+;-------------------------------------------------------Player 0 trigger
+
+DoMissiles
+
+    lda INPT4       ;read trigger 0
+    bmi NoButton0
+    lda Player0Lives
+    bmi NoButton0   ;and of course, he can't fire if he's dead
+    lda PauseTimer
+    bne NoButton0   ;or if game is in pause state
+
+    lda Player0MY   ;
+    cmp #192        ;can't fire if insufficient time has passed since last
+    bne NoButton0   ;shot finished.
+
+    lda GameOver    ;don't shoot if game not in progress
+    bne NoButton1
+
+    lda Player0Pos  ;init new shot
+    clc
+    adc #3
+    sta Player0MX
+
+    lda #172
+    sta Player0MY
+
+    inc Player0ShotCount
+    lda Player0ShotCount
+    cmp #23
+    bne NoResetShotCounter0
+    lda #8
+    sta Player0ShotCount    
+NoResetShotCounter0
+
+    LDA #$38
+    STA fx1
+
+NoButton0
+    lda Player0MY
+    cmp #192
+    beq L00         ;missile cleared to do what it will
+
+    LDA Player0MS
+    BEQ MOVEM0
+
+    LDA CurrMissile
+    BNE L00
+
+    DEC Player0MS
+    LDA Player0MS
+    BNE L00
+    STA Player0MX
+    STA Player0MY
+
+MOVEM0
+
+    lda Player0MY
+    sec
+    sbc #4
+    sta Player0MY
+
+    cmp #192        ;did it just get to the gateway?       
+    bne L00         ;nope
+
+    bit SWCHB
+    bvc L00        ;if difficulty B, it passes
+
+    bit INPT4      ;if difficulty A
+    bmi L00        ;and button down (plus) don't reset
+    lda #220       ;not cleared
+    sta Player0MY
+                   
+L00
+
+;-------------------------------------------------------Player 1 trigger
+
+    lda INPT5       ;check Player 1's trigger and fire if necessary
+    bmi NoButton1
+    lda Player1Lives
+    bmi NoButton1
+    lda PauseTimer
+    bne NoButton1   ;or if game is in pause state
+
+    lda Player1MY   ;
+    cmp #192        ;can't fire if insufficient time has passed since last
+    bne NoButton1   ;shot finished.
+
+    lda Player1Pos
+    clc
+    adc #3
+    sta Player1MX
+
+    lda #172
+    sta Player1MY
+
+    inc Player1ShotCount
+    lda Player1ShotCount
+    cmp #23
+    bne NoResetShotCounter1
+    lda #8
+    sta Player1ShotCount    
+NoResetShotCounter1
+
+    LDA #$38
+    STA fx1
+
+NoButton1
+    lda Player1MY
+    cmp #192
+    beq L10         ;missile cleared to do what it will
+
+    LDA Player1MS
+    BEQ MOVEM1
+
+    LDA CurrMissile
+    BEQ L10
+
+    DEC Player1MS
+    LDA Player1MS
+    BNE L10
+    STA Player1MX
+    STA Player1MY
+
+MOVEM1
+    LDA Player1MY
+    sec
+    sbc #4
+    sta Player1MY
+
+    cmp #192        ;did it just get to the gateway?       
+    bne L10         ;nope
+
+    bit SWCHB
+    bpl L10        ;if difficulty B, it passes
+
+    bit INPT5      ;if difficulty A
+    bmi L10        ;and button down (plus) don't reset
+    lda #220       ;not cleared
+    sta Player1MY
+                   
+L10
+
+;------------------------------------------------------Position missile
+    
+    lda CurrMissile
+    eor #$01
+    sta CurrMissile ;A = 0 if player 0 missile, 1 if player 1 missile
+    TAY
+
+
+    LDX Player0MS,Y
+    asl
+    asl
+    asl             
+    tay
+
+    lda Player0MY,y
+    sta MissileY
+
+    lda Player0MX,Y
+    adc #1
+    SEC
+    SBC ADJSEQ,X
+    jsr Hconvert
+    
+    sta WSYNC
+    sta.w HMM1  ;+4  4
+    and #$0F        ;+2  6
+    tay             ;+2  8
+    nop
+    nop
+    nop             ;+6  14
+MP0 dey             ;+2  16
+    bpl MP0         ;+2  18 + (X*5)
+    sta RESM1
+
+
+;-------------------------------------------------------------Invader shots
+
+    lda EnemyBombs
+    bne NoBomb
+
+    lda GameOver
+    bne NoBomb
+
+    lda PauseTimer
+    bne NoBomb
+
+    lda BombDelay   ;if time-until-next-bomb is zero, do a bomb!
+    beq BB1
+
+    dec BombDelay
+    jmp NoBomb
+
+BB1
+    lda #1          ;so if we don't shoot, we'll try again next frame
+    sta BombDelay
+
+    jsr RandomByte
+    clc
+    bmi BB2         ;50-50 chance of trying to shoot at the player
+
+    and #31         ;0-31
+    adc #4          ;4-35
+    jmp BB3
+    
+BB2 and #31         ;0-31
+    adc Player0Pos  ;middle-3 to middle+28
+    sbc #11         ;subtracts 12, so middle-15 to middle+16
+    lsr
+    lsr             ;change to PF blocks
+
+BB3 tay
+    sty Temp1       ;save for calcing X-coordinate
+
+    lda #4
+    sec
+    sbc MinColor    ;start at row (4-MinColor)
+    asl
+    asl
+    asl             ;*8 because 8 bytes/row
+    adc hittable,Y  ;Y = index into Invaders
+
+    sec
+
+BB0 tax             ;X index into bottom row
+    lda hittable2,Y
+    eor #$FF        ;if A && [Invaders+X] != 0, it shoots
+    and Invaders,X
+    bne ShootBomb   ;shoot!
+    txa
+    sbc #8          ;if not, try next line up
+    bpl BB0
+    jmp NoBomb      ;wrong column, maybe next time
+
+ShootBomb
+    txa             ;(X/8) * 12 + TopLine + 5 gives top of invader
+    lsr
+    and #$FC        ;instead of lsr,lsr,asl,asl
+    sta Temp2
+    asl
+    clc
+    adc Temp2
+    adc TopLine     ;A has final y-coord of bomb
+    adc #13         ;plus 5 because of gap after TopLine, plus
+                    ;8 because this is the ending scanline
+    cmp #170
+    bcs NoBomb      ;If in death row or below, don't shoot
+
+    sta EnemyBombs
+
+    lda Temp1
+    asl
+    asl
+    adc #2
+    sta EnemyBombsX
+    jsr Hconvert
+    sta EnemyBombs+2
+
+    ldy InvLeft
+    lda advancetable,Y
+    sta BombDelay
+
+NoBomb
+    ldx #0
+
+MoveBombs
+    lda EnemyBombs,X
+    beq BM0
+    clc
+    adc #2
+    sta EnemyBombs,X
+
+    cmp #190
+    bcc BM0
+    lda #0
+    sta EnemyBombs,X
+BM0
+
+    inx
+    cpx #2
+    bne MoveBombs
+
+    ldy EnemyBombs          ;swap bombs.  the active bomb always has its Y-coord in EnemyBombs and its FC_X in EnemyBombs+2
+    ldx EnemyBombs+2        ;the inactive bomb (30Hz flicker) is stored in those locations +1
+
+    lda EnemyBombs+1
+    sta EnemyBombs
+    lda EnemyBombs+3
+    sta EnemyBombs+2
+
+    sty EnemyBombs+1
+    stx EnemyBombs+3
+    
+    lda EnemyBombsX         ;also swap raw X coords
+    ldx EnemyBombsX+1
+    stx EnemyBombsX
+    sta EnemyBombsX+1
+
+
+    sta WSYNC
+    lda EnemyBombs+2    ;+3  3
+    sta HMBL            ;+3  6
+    and #$0F            ;+2  8
+    tax                 ;+2 10
+    nop                 ;+2 12
+    nop                 ;+2 14
+       
+BP0 dex                 ;+2 16
+    bpl BP0             ;+2 (18 + x*5)
+    sta RESBL
+    sta WSYNC
+    sta HMOVE
+
+;----------------------------------------------------Check for game over if
+;----------------------------------------------invaders have reached bottom.
+
+    lda GameOver
+    bne MinColor2       ;don't check if game's already over, nitwit!
+
+    lda MinColor        ;Last line of invaders:
+    asl                 ;(TopLine + ((4-Mincolor)*12) + 10
+    asl                 ;= (TopLine + 48 - MinColor*12) + 10
+    sta Temp1           ;= (TopLine - (MinColor*12) + 58)
+    asl
+    clc
+    adc Temp1           ;A has MinColor * 12
+    sta Temp1
+    lda TopLine
+    sec
+    sbc Temp1           ;(TopLine - (Mincolor*12))
+
+    clc
+    adc #58
+    
+    cmp #177            ;
+    bne MinColor2
+    
+    lda #8
+    sta GameOver
+    
+    lda #240
+    sta PauseTimer
+    
+    stx Player0Lives    ;X was still $FF from the ball positioning loop above
+    stx Player1Lives
+    
+    inx ;x=0
+    stx WhichPlayerDied
+
+MinColor2
+    ;RTS                 ;
+
+;=========================================================================
+;Draw Screen - the tricky part.  We have to draw the screen line by line.
+;=========================================================================
+DrawScreen              ;
+
+    LDY CurrMissile
+    LDX Player0MS,Y
+    LDA EXPSEQ,X
+    sta NUSIZ1
+
+    lda #5              ;five rows of invaders
+    sta ModRow2
+
+    ldx #ENAM1          ;set up stack to missile 1, for the PHP trick
+    txs
+
+    lda FrameCount
+    asl
+    asl
+    sta Temp1
+    asl
+    adc Temp1           ;FrameCount * 12 = index into ptable for top row
+    sta ModOffset
+
+    lda #0
+    sta NUSIZ0          ;one copy
+    sta COLUBK
+
+    sta ScoreTemp
+    sta ScoreTemp+1
+    sta ScoreTemp+2
+    sta ScoreTemp+3
+
+    lda #$FF            ;page for number data
+    sta Temp2
+
+    lda #2
+    sta CTRLPF
+
+    ldx ColorIndex
+    lda P0Color,X       ;player 0 color - green
+    sta COLUP0          ;
+  
+    ldy P1Color,X      ;player 1 color - red
+    lda CurrentGame
+    and #$01
+    bne E01$            ;if 1-player, lowest bit of CurrentGame is 0
+    ldy #$0             ;make it black instead
+E01$ sty COLUP1         ;
+
+Wait1
+    LDA INTIM           ;wait here until the timer goes off...
+    BNE Wait1           ;
+
+    STA WSYNC           ;added by Piero to avoid screen wobbling
+
+    STA VBLANK          ;here we go! - begin scanline -4
+
+    lda VideoMode       ;skip 25 lines if in PAL-50 mode
+    and #%00000010
+    beq Hertz60$
+    ldx #25
+Hertz50$
+    sta WSYNC
+    dex
+    bne Hertz50$    
+    
+Hertz60$
+
+;-----------------------------------------------------------Do scores here
+
+    ldy #0
+    clc
+
+DoScores                ;38 < z < 54 49 < z < 65
+    sta WSYNC           ;begin scanlines -3, 0, 3, 6, 9, 12
+    lda ScoreTemp       ;+3  3   set line 0 player 0
+    sta PF1             ;+3  6   
+    sta ScoreBytes      ;+3  9
+    lda ScoreTemp+1     ;+3 12
+    sta PF2             ;+3 15
+    sta ScoreBytes+1    ;+3 18
+
+    lda Player0Score    ;+3 21   thousands digit
+    sta Temp1           ;+3 24   Temp2:Temp1 now 16-bit pointer to 
+    lda (Temp1),Y       ;+5 29   beginning of digit.  Y=index into digit.
+    and #$F0            ;+2 31   left four bits only
+    sta Temp3           ;+3 34   store thousands digit
+
+    lda ScoreTemp+2     ;+3 37   set line 0 player 1
+    sta ScoreBytes+2    ;+3 40
+    sta PF1             ;+3 43
+    lda ScoreTemp+3     ;+3 46
+    sta ScoreBytes+3    ;+3 49
+    sta PF2             ;+3 52
+
+    lda Player0Score+1  ;+3 55   hundreds digit
+    sta Temp1           ;+3 58   Temp2:Temp1 now 16-bit pointer to
+    lda (Temp1),Y       ;+5 63   beginning of digit.
+    and #$0F            ;+2 65   right four bits only
+    ora Temp3           ;+3 68
+    sta ScoreTemp       ;+3 71   done with "PF1"
+
+    lda ScoreBytes      ;+3 74   set line 1 player 0
+    sta PF1             ;+3  1
+    lda ScoreBytes+1    ;+3  4
+    sta PF2             ;+3  7
+
+    lda Player1Score    ;+3 10   thousands digit
+    sta Temp1           ;+3 13
+    lda (Temp1),Y       ;+5 18
+    and #$F0            ;+2 20   left four bits only
+    sta Temp3           ;+3 23
+
+    lda Player1Score+1  ;+3 26   hundreds digit
+    sta Temp1           ;+3 39
+    lda (Temp1),Y       ;+5 34
+    and #$0F            ;+2 36   right four bits
+    ora Temp3           ;+3 39
+    sta ScoreTemp+2     ;+3 42   done with "PF3"
+
+    tya                 ;+2 44
+    adc #11             ;+2 46   add 11 to get to reversed digit patterns
+    tay                 ;+2 48
+
+    lda ScoreBytes+2    ;+3 51   set line 1 player 1
+    sta PF1             ;+3 54
+    lda ScoreBytes+3    ;+3 57
+    sta PF2             ;+3 60
+
+    lda Player0Score+2  ;+3 63   tens digit
+    sta Temp1           ;+3 66   Temp2:Temp1 points to pattern for tens digit
+    lda (Temp1),Y       ;+5 71
+    ora [numbertable+10],Y;+4 75   dummy zero
+    sta ScoreTemp+1     ;+3  2   done with "PF2"
+
+    lda ScoreBytes      ;+3  5   set line 2 player 0
+    sta PF1             ;+3  8
+    lda ScoreBytes+1    ;+3 11
+    sta PF2             ;+3 14
+
+    lda Player1Score+2  ;+3 17   tens digit
+    sta Temp1           ;+3 20   Temp2:Temp1 points to pattern for tens digit
+    lda (Temp1),Y       ;+5 25
+    ora [numbertable+10],Y;+4 29   dummy zero
+    sta ScoreTemp+3     ;+3 32   done with "pf4"
+
+    tya                 ;+2 34
+    adc #11             ;+2 36   carry was clear
+    tay                 ;+2 38
+
+    lda ScoreBytes+2    ;+3 41   set line 1 player 1
+    sta PF1             ;+3 44
+    lda ScoreBytes+3    ;+3 47
+    sta PF2             ;+3 50
+
+    cpy #132            ;+2 52   clears carry
+    beq SC0             ;+2 54
+    jmp DoScores        ;+3 57
+
+
+SC0 lda #15
+    sta Scanline
+
+    ldy SaucerPosFC ;pc
+    STA HMCLR ;pc
+
+    lda #0
+    sta WSYNC           ;begin scanline 15
+
+    sta PF1             ;clear out the scores
+    sta PF2
+
+;**** position saucer (P0)
+
+    tya
+    sta HMP0            ;+3 10 
+    and #$0F            ;+2 12
+    tay                 ;+2 14
+P00 dey                 ;+2 16
+    bpl P00             ;when branch not taken: +2 (18 + x*5)
+    sta RESP0           ;(21 + x*5) NOW! =)  position saucer
+
+    STA WSYNC ;pc
+    STA HMOVE ;pc sto aggiungendo 1 linea
+
+;-----------------------------------------------------------do the saucer!
+
+    lda #0
+    sta CTRLPF
+
+    ldx ColorIndex
+    lda SaucerColor,X
+    sta COLUP0                     ;player 0 color, for saucer (red)
+    lda ShieldsAndMissileColor,X   ;player 1 color, for M1 (green)
+    sta COLUP1
+    
+    lda Saucer ;pc
+    beq DoTop  ;pc         ;if saucer not active, don't display
+
+   
+    lda #0
+    ldx SaucerTimeHi
+    cpx #$C0
+    bne S0$
+    lda SaucerPoints
+    asl
+    asl
+    asl                  ;turn SaucerPoints from a 1-4 value to 8,16,24,32
+S0$ clc
+    adc #<saucerpict
+
+    sta Temp1           ;A, Temp1 now offset into [saucertable]
+    lda #>saucerpict
+    sta Temp2           ;Temp2:Temp1 16-bit pointer to saucer
+
+
+    ldy #7              ;eight lines
+DrawSaucer
+    sta WSYNC
+    lda (Temp1),Y
+    sta GRP0
+
+    lda Scanline
+    sec
+    sbc MissileY
+    and #$F8
+    php
+    pla
+
+    inc Scanline        ;inc to current row
+    
+    dey
+    bpl DrawSaucer
+    
+    sty Temp2           ;dead-man's-switch for shields later, this will set it to FF
+    
+
+;----------------------------------------------Above the block of invaders
+
+DoTop
+
+    lda CXM1P
+    and #%10000000
+    lsr
+    sta invhit          ;M1-P0 collisions are in bit 7, move that over to bit 6
+
+    sta WSYNC           ;
+    BIT Scanline ;pc +3
+;    sta HMCLR           ;+3  3  May as well use this time to reset players
+    lda #$B0            ;+3  6  for the shields
+    sta HMP0            ;+3  9
+    sta HMP1            ;+3 12
+
+    lda Scanline        ;+3 15
+    sec                 ;+2 17
+    sbc MissileY        ;+3 20
+    and #$F8            ;+2 22
+    php                 ;+3 25
+    nop                 ;+2 27
+
+    sta RESP0           ;+3 30  cycle 30 * 3 = pixel 91. +5 = pixel 96.
+
+    pla                 ;+4 34
+    inc Scanline        ;+5 39
+    inc Temp1           ;+5 44  Yeah, I'm not up on the fancy SLEEP macros
+    inc Temp1           ;+5 49
+    inc Temp1           ;+5 54
+    inc Temp1           ;+5 59
+    sta RESP1           ;+3 62
+
+    sta WSYNC
+    sta HMOVE
+    inc Scanline        ;to current line (17)
+
+
+SkipTop
+    inc Scanline
+    sta WSYNC           ;begin scanline 18,20,22,24...
+
+    lda Scanline
+    sec
+    sbc MissileY
+    and #$F8
+    php
+    pla                 ;reset the stack register
+
+    inc Scanline
+    sta WSYNC           ;begin scanline 19,21,23,25...
+
+                        ;we're supposed to do bombs here but there aren't
+                        ;any above the invader block
+
+    lda Scanline
+    cmp TopLine         ;When the invader block starts, we want to end
+    bne SkipTop         ;this loop.
+    
+    pla                 ;reset stack pointer to ENABL
+
+;-------------------------------------------------Display block of invaders
+;Throughout here, "row" refers to the display of one row of 11 invaders
+;(four scanlines).. "line" refers to one scanline.
+;Also throughout this entire thing, until display players, we're still
+;going to use X to count scanlines, so we can easily compare it with
+;Player0MY and Player1MY.
+
+;Each block of invaders consists of four lines during which we set up for
+;the block after checking the bombs/missiles, six lines during which we
+;display invaders, and two lines during which we clean up.
+
+;Ball = bombs, M1 = player missile, M0 = not used
+
+EachInvRow              ;
+
+    inc Scanline        ;Scanline = line we're about to start
+    sta WSYNC           ;begin scanlines 50, 62, 74, 86, 98
+
+    lda EnemyBombs
+    sec
+    sbc Scanline
+    and #$F8
+    php
+
+    lda #$0E
+    sta COLUPF          ;make the ball (bomb) gray - color is the same regardless of TV standard - this is necessary to not black out ball for inviso invaders
+
+    lda Scanline   
+    sec
+    sbc MissileY
+    and #$F8
+    php
+
+    ldx #ENABL
+    txs
+
+    inc Scanline
+    sta WSYNC           ;begin scanlines 51, 63, 75, 87, 99
+
+    inc Scanline
+    sta WSYNC           ;begin scanlines 52, 64, 76, 88, 100
+    lda EnemyBombs
+    sec
+    sbc Scanline
+    and #$F8
+    php
+
+    lda Scanline   
+    sec
+    sbc MissileY
+    and #$F8
+    php
+
+    ldx #ENABL
+    txs
+
+    inc Scanline
+
+    lda CurrColor       ;get the color index, 4 for top line of invaders dropping to 0
+    asl                 ;*4 to index into color table
+    asl
+    adc ColorIndex      ;add 1 for PAL and 2 for invisible
+    tay
+
+    sta WSYNC           ;Begin scanlines 53, 65, 77, 89, 101.
+
+                        ;This section (until next large comment line) happens
+                        ;during last scanline before invader row starts.
+    sta Temp1           ;+3  3  waste 3 cycles
+    
+    lda [colortable],Y  ;+4  7 get color of current row of thingies
+    sta COLUPF          ;+3 10 and store it to the playfield
+                        ;
+    sec                 ;+2 12 We're going to use Y to count rows through
+    lda #4              ;+3 15 the field.  Y will be an index into Invaders
+    sbc CurrColor       ;+3 18 and we'll decrement it by 8 after each row.
+
+    asl                 ;+2 20
+    asl                 ;+2 22
+    asl                 ;+2 24
+    tay                 ;+2 26
+
+    dec ModRow2         ;+5 31
+    lda ModRow2         ;+3 34
+    lsr                 ;+2 36 this is 2, 1, 1, 0, 0 for which line
+    sta ModRow          ;+3 39 gets modded.
+
+    lda ModOffset       ;+3 42 If carry set, ModRow2 equals 3 or 1, so
+    bcc MD0             ;+2 44 advance ModOffset.
+    adc #71             ;+2 46 carry set so this adds 72
+MD0 sta ModOffset       ;+3 49/48
+
+    tax                 ;+2 51/50
+
+    lda #2              ;+2 53/52
+    sta Temp4           ;+3 56/55
+
+    lda Temp4           ;+2 58/57
+    nop                 ;+2 60/59
+
+;Here, we are right before the line in which we gotta display the
+;playfield for the invaders block.
+;Each line, we have to set up the playfield for the left half of the line,
+;then, somewhere in the middle, rewrite it for the right half of the line.
+    
+I00                     ;    62/60/60   from and/fullrow/EachInvRow
+    lda Temp4           ;+3  66/63/63   All these cycles could be one less.
+    cmp ModRow          ;+3  69/66/66
+    bne FullRow         ;+2  71/68/68
+
+    lda Invaders,Y      ;+4  **/72/72   Can't get here from AndRow.
+    and [ptable+0],X    ;+4  76
+    sta PF0             ;+3   3    < 23
+    lda Invaders+1,Y    ;+4   7
+    and [ptable+1],X    ;+4  11
+    sta PF1             ;+3  14    < 28
+    lda Invaders+2,Y    ;+4  18
+    and [ptable+2],X    ;+4  22
+    sta PF2             ;+3  25    < 38
+
+    lda Invaders+3,Y    ;+4  29
+    and [ptable+3],X    ;+4  33
+    sta PF0             ;+3  36    28 < z < 49
+    lda Invaders+4,Y    ;+4  40
+    and [ptable+4],X    ;+4  44
+    sta PF1             ;+3  47    38 < z < 54
+    lda Invaders+5,Y    ;+4  51
+    and [ptable+5],X    ;+4  55
+    sta PF2             ;+3  58    49 < z < 65
+
+    lda Invaders,Y      ;+4  62
+    and [ptable+6],X    ;+4  66
+    sta PF0             ;+3  69    > 54
+    lda Invaders+1,Y    ;+4  73     
+    and [ptable+7],X    ;+4   1
+    sta PF1             ;+3   4    < 28
+    lda Invaders+2,Y    ;+4   8
+    and [ptable+8],X    ;+4  12
+    sta PF2             ;+3  15    < 38
+
+    lda Invaders+3,Y    ;+4  19
+    and [ptable+9],X    ;+4  23
+
+    nop
+    nop
+
+    sta PF0             ;+3  26    28 < z < 49
+    lda Invaders+4,Y    ;+4  30
+    and [ptable+10],X   ;+4  34
+    sta PF1             ;+3  37    38 < z < 54
+    lda Invaders+5,Y    ;+4  41
+    and [ptable+11],X   ;+4  45
+    sta PF2             ;+3  48    49 < z < 65
+
+    dec Temp4           ;+5  53
+
+    bmi Between         ;+2  55
+    jmp I00             ;+3  58
+
+FullRow                 ;
+    sta WSYNC           ;go
+    lda Invaders,Y      ;+4   4
+    sta PF0             ;+3   7    < 23
+    lda Invaders+1,Y    ;+4  11
+    sta PF1             ;+3  14    < 28
+    lda Invaders+2,Y    ;+4  18
+    sta PF2             ;+3  21    < 38
+
+    lda EnemyBombs      ;+3  24   I should be doing a SEC before the SBC,
+    sbc Scanline        ;+3  27   but I *really* need the cycles.  Besides,
+    and #$F8            ;+2  29   exact bomb positioning doesn't matter
+    php                 ;+3  32   this high up on the screen.
+
+    lda Invaders+3,Y    ;+4  36
+    sta PF0             ;+3  39   28 < z < 49
+    lda Invaders+4,Y    ;+4  43
+    sta PF1             ;+3  46   38 < z < 54
+    lda Invaders+5,Y    ;+4  50
+    sta PF2             ;+3  53   49 < z < 65
+
+    lda Invaders,Y      ;+4  57
+    sta PF0             ;+3  60     > 54
+    lda Invaders+1,Y    ;+4  64
+    sta PF1             ;+3  67     > 65
+
+    lda Scanline        ;+3  70   We only add to Scanline during lines in
+    clc                 ;+2  72   which we don't modify the invaders, so
+    adc #3              ;+2  74   we add 3 on each of two lines instead of
+    sta Scanline        ;+3   1   2 on each of three lines.
+                               
+    lda Invaders+2,Y    ;+4   5     
+    sta PF2             ;+3   8    
+
+    lda Scanline        ;+3  11
+    sec                 ;+2  13
+    sbc MissileY        ;+3  16
+    and #$F8            ;+2  18
+    php                 ;+3  21
+
+    pla                 ;+4  25
+    pla                 ;+4  29
+
+    lda Invaders+3,Y    ;+4  33
+    sta PF0             ;+3  36   28 < z < 49
+    lda Invaders+4,Y    ;+4  40    
+    sta PF1             ;+3  43   38 < z < 54
+    lda Invaders+5,Y    ;+4  47    
+    sta PF2             ;+3  50   49 < z < 65
+
+    dec Temp4           ;+5  55
+
+    bmi Between         ;+2  57
+    jmp I00             ;+3  60
+
+Between                 ;    60/61   from androw/fullrow
+    lda #0              ;+2  62/63  ;This begins the two blank lines after
+    sta PF0             ;+3  65/66  ;the six lines of invaders.
+    sta PF1             ;+3  68/69
+    sta WSYNC           ;     0
+    sta PF2             ;+3   3
+
+    inc Scanline        ;+5   8
+
+    lda EnemyBombs      ;+3  11
+    sec                 ;+2  13
+    sbc Scanline        ;+3  16
+    and #$F8            ;+2  18
+    php                 ;+3  21
+
+    lda #$0E            ;+2  23
+    sta COLUPF          ;+3  26 make the ball (bomb) gray - color is the same regardless of TV standard - this is necessary to not black out ball for inviso invaders
+
+    lda Scanline        ;+3  29
+    sec                 ;+2  31
+    sbc MissileY        ;+3  34
+    and #$F8            ;+2  36
+    php                 ;+3  39
+
+    ldx #ENABL          ;+2  41
+    txs                 ;+2  43
+
+    inc Scanline        ;+5  48 Scanline now = next scanline
+
+    ldx CurrColor       ;+3  51
+    dec CurrColor       ;+5  56
+
+    lda CXM1FB          ;+3  59
+    and #%10000000      ;+2  61
+    ora invhit          ;+3  64
+    STA invhit          ;+3  67 now invhit has bit 6 set if the saucer was hit (M1-P0), bit 7 set if an invader was hit (M1-PF)
+
+    ldy #$0E            ;+2  69 this line does nothing unless we branch to DoBottom2, but it's here to squeeze it in before the WSYNC
+
+    cpx MinColor        ;+3  72
+    sta WSYNC           ;If we finished the last line of invaders
+    beq DoBottom2 ;pc       ;lets branch to the bottom.
+    jmp EachInvRow
+
+;----------------------------------------------Between invaders and players
+
+DoBottom2:
+    STA CXCLR
+    sty COLUPF          ;make the ball (bomb) gray - color is the same regardless of TV standard - this is necessary to not black out ball for inviso invaders
+    JMP DoBottom1
+
+DoBottom
+    inc Scanline        ;Scanline = line we're about to start
+    sta WSYNC           ;begin scanlines 92,94,96,98...
+
+    lda EnemyBombs
+    sec
+    sbc Scanline
+    and #$F8
+    php 
+
+    lda Scanline
+    sec
+    sbc MissileY
+    and #$F8
+    php
+
+    ldx #ENABL
+    txs
+
+    inc Scanline
+    
+    sta WSYNC
+
+DoBottom1               ;higher cycle counts are if we jumped from the first trip into DoBottom2 (this happens if the invaders are just about to reach land)
+    lda GameOver        ;+3  3 / 15       8 if game over, 0 if not
+    clc                 ;+2  5 / 17
+    adc #173            ;+2  7 / 19
+    sta Temp1           ;+3 10 / 22       this works out to 173 during gameplay, 181 if not playing
+
+    lda Scanline        ;+3 13 / 25
+    cmp Temp1           ;+3 16 / 28  are we done?
+    bne nosetp          ;+2 18 / 30
+    jmp SetPlayers      ;+3 21 / 33  SetPlayers is out of range for a short jump
+
+nosetp
+    cmp #157            ;+2 20 / 33  we're not done yet, but is it time for shields?
+    bne DoBottom        ;+2 22 / 35  if not, keeep going...
+
+;--------------------------------------------------------------Draw Shields.
+
+    ldx ColorIndex      ;+3 25 / 38
+    lda ShieldsAndMissileColor,X ;+4 29 / 42           ;green
+    sta COLUP0          ;+3 32 / 45
+    sta COLUP1          ;+3 35 / 48
+
+    lda #$06            ;+2 37 / 50 3 wide copies of player 0
+    sta NUSIZ0          ;+3 40 / 53
+    ldx #ENABL          ;+2 42 / 55 to reset the stack pointer.  We don't need X for anything else in the loop.
+
+    ldy #3              ;+2 44 / 57 4 lines of shields, in a double-line kernel
+DoShields
+    sty Temp2           ;+3 47 / 60 Temp2 is a dead-man's-switch.  We set it to FF after doing the saucer.
+                        ;           In overscan, if Temp2 is still FF, the shields were never drawn.
+
+DoShields0
+
+    sta WSYNC           ;go
+    lda EnemyBombs      ;+3  3
+    sec                 ;+2  5
+    sbc Scanline        ;+3  8
+    and #$F8            ;+2 10
+    php                 ;+3 13  turn on/off bomb
+    lda Shields,Y       ;+4 17
+    sta GRP0            ;+3 20  first shield
+    lda Shields+12,Y    ;+4 24
+    sta GRP1            ;+3 27  fourth shield
+    inc Scanline        ;+5 32   now accurate for current line
+    lda Shields+4,Y     ;+4 36
+    sta GRP0            ;+3 39  second shield
+    sec                 ;+2 41   for the missile check    
+    lda Shields+8,Y    ;+4 45
+    sta GRP0            ;+3 48  third shield
+    lda Scanline        ;+3 51
+    sbc MissileY        ;+3 54
+    and #$F8            ;+2 56
+    php                 ;+3 59  turn on/off missile
+    txs                 ;+2 61   reset the stack pointer to ENABL
+
+    sta WSYNC
+
+    lda EnemyBombs      ;+3  3
+    sec                 ;+2  5
+    sbc Scanline        ;+3  8
+    and #$F8            ;+2 10
+    php                 ;+3 13  turn on/off bomb
+
+    lda Shields,Y       ;+4 17
+    sta GRP0            ;+3 20  first shield
+    lda Shields+12,Y    ;+4 24
+    sta GRP1            ;+3 27  fourth shield
+    inc Scanline        ;+5 32   now accurate for current line
+    lda Shields+4,Y     ;+4 36
+    sta GRP0            ;+3 39  second shield
+    sec
+    lda Shields+8,Y    ;+4 45
+    sta GRP0            ;+3 48  third shield
+    lda Scanline        ;+3 51
+    sbc MissileY        ;+3 54
+    and #$F8            ;+2 56
+    php                 ;+3 59  turn on/off missile
+    txs                 ;+2 61   reset the stack pointer to ENABL
+    
+    dey                 ;+2 63
+    bpl DoShields       ;+3 66
+
+
+    sta WSYNC
+    iny                 ;Y now 0
+    sty GRP0
+    sty GRP1
+
+    ldx ColorIndex
+    lda P1Color,X       ;player 0 color - green
+    sta COLUP1
+  
+    sty NUSIZ0          ;1 copy of player 0
+
+    inc Scanline
+    inc Scanline        ;accurate for next line
+    sta WSYNC
+
+    LDA CXM1P ;pc
+    STA shldhitbyMissile ;pc
+
+    LDA CXP0FB
+    ORA CXP1FB
+    STA shldhitbyBomb
+
+    STA CXCLR ;pc
+
+    jmp DoBottom
+
+                        ;these bytes of code are unreachable; they are padding to make the RESPx loops not hit a page boundary
+
+;--------------------------------------------------Set the player positions.
+
+SetPlayers              ;   21 / 33 Cycle count coming in from before the jump to here.  Higher numbers are if we jumped from the first trip into DoBottom2 (this happens if the invaders are just about to reach land)
+
+    ldy #0              ;+2 35
+    lda GameOver        ;+3 38  
+    bne LivesBox        ;+2 40 skip drawing players if game over
+
+    ldx ColorIndex      ;+2 42
+    lda P0Color,X       ;+4 46
+    ldy Player0Lives    ;+3 49 if player 0 absent, don't draw him
+    bpl E00$            ;+2 51
+    lda #0              ;+2 53 if lives was negative (-1), he's not here, clear COLUP0
+E00$ sta COLUP0         ;+3 56
+;
+    lda P1Color,X       ;+4 60
+    ldy Player1Lives    ;+3 63
+    bpl E01$            ;+2 65
+    lda #0              ;+2 67
+E01$ sta COLUP1         ;+3 70
+    
+    sta WSYNC           ;begin scanline 174
+    sta.w HMCLR     ;+4  4   let's do this now
+    lda Player0PosFC    ;+3  7
+    sta HMP0            ;+3 10 
+    and #$0F            ;+2 12
+    tay                 ;+2 14
+P0  dey                 ;+2 16
+    bpl P0              ;when branch not taken: +2 (18 + x*5)
+    sta RESP0           ;(21 + x*5) NOW! =)
+
+    sta WSYNC           ;begin scanline 175
+    lda Player1PosFC    ;+3  3
+    sta HMP1            ;+3  6
+    and #$0F            ;+2  8
+    tay                 ;+2 10   
+    lda #0              ;+2 12
+    nop                 ;+2 14
+P1  dey                 ;+2 16
+    bpl P1              ;when branch not taken: +2 (18 + x*5)
+                        ;
+    sta RESP1           ;
+
+    sta WSYNC
+    sta HMOVE
+
+;----------------------------------------------------------Draw the players
+    sta ENAM1
+    inc Scanline
+
+    ldy #5              ;players are 6 lines tall
+
+DrawPlayers             ;
+    
+    lda (Player0Ptr),Y  ;
+    sta GRP0            ;
+    lda (Player1Ptr),Y  ;
+    sta GRP1            ;
+
+    inc Scanline
+
+    lda EnemyBombs
+    sec
+    sbc Scanline
+    and #$F8
+    php
+
+    pla
+
+LivesBox
+    dey                 ;
+    sta WSYNC           ;begin scanlines 177 through 182
+    bpl DrawPlayers     ;
+
+    ldx ColorIndex      ;this segment is executing when exactly?  this appears to be an extra scanline that isn't counted?
+    lda PFColor,X       ;
+    sta COLUPF          ;
+
+    lda #$01            ;reflect playfield
+    sta CTRLPF          ;
+
+;---------------------------------------------------------Top of "lives box"
+
+    sta WSYNC           ;if off on scanlines for PAL CHECK HERE
+    
+    lda #$80            ;+2  2 one bit on each side
+    sta PF0             ;+3  5
+    
+    ldx #0              ;+3  8
+    stx ENABL           ;+3 11 make sure we kill the ball so we don't 
+                        ;      generate player-ball collisions in the box
+    stx ENAM1           ;+3 14 (X was zero from BNE loop)
+
+    stx GRP0            ;+3 17 turn off players 
+    stx GRP1            ;+3 20                  
+
+    ;During the first line of the box, we are going to calculate and set
+    ;NUSIZx for both players.
+
+    lda #$FF            ;+2 22 fill the middle
+    sta PF1             ;+3 25
+    sta PF2             ;+3 28
+
+    ;This is a little tricky to follow.  If a player's lives = 0, we don't
+    ;want to draw any in the box, but we'll need to zero COLUPx because
+    ;there is no NUSIZ value for "nothing shows up."
+
+    ldx Player0Lives    ;+2   
+    dex                 ;+2    Negative now means don't draw
+    bmi N1              ;+2   
+    lda livestable,X    ;+4   
+    sta NUSIZ0          ;+3   
+    jmp N2              ;+3   
+N1  lda #0              ;+2   
+    sta COLUP0          ;+3   
+
+N2  ldx Player1Lives    ;+2    (if we came from the JMP)
+    dex                 ;+2                 again, negative means clear COLUP1
+    bmi N3              ;+2   
+    lda livestable,X    ;+4   
+    sta NUSIZ1          ;+3   
+    jmp N4              ;+3 
+N3  lda #0              ;+2   
+    sta COLUP1          ;+3   
+
+    ;During the second line of the box, we are going to set the new positions
+    ;for both players to draw them in the lives box.
+
+N4  sta WSYNC           ;begin scanline 183 (second line of box)
+    sta HMCLR           ;+3  3
+    inc Temp1           ;
+    inc Temp1           ;
+    inc Temp1           ;
+    inc Temp1           ;+5 * 4 = 23
+    sta RESP0           ;+3 26 put player 0 here
+    inc Temp1           ;
+    inc Temp1           ;
+    inc Temp1           ;
+    inc Temp1           ;
+    inc Temp1           ;+5 * 5 = 51
+    nop                 ;+2 53
+    sta RESP1           ;+3 56 put player 1 here
+
+    lda #$F0            ;+2 58  move player 0 one pixel to the right
+    sta HMP0            ;+3 61
+    lda #$10            ;+2 63  and player 1 one pixel to the left
+    sta HMP1            ;+3 65
+;------------------------------------------------------Draw lives within box
+
+    sta WSYNC           ;begin scanline 184
+    sta HMOVE
+
+    lda #0              ;clear center of playfield
+    sta PF1             ;
+    lda #$FC            ;
+    sta PF2             ;
+
+    ldx #6              ;six lines - we'll redisplay players here for lives
+DrawLives               ;
+    lda [playerpict-1],X;
+    sta GRP0            ;
+    sta GRP1            ;
+    sta WSYNC           ;begin scanlines 185-190
+    dex                 ;(players are drawn on lines 184-189)
+    bne DrawLives       ;
+
+    lda #$FF            ;turn on middle of the playfield for last two lines
+    sta PF1             ;of box ( =last two lines of screen)
+    sta PF2             ;
+
+;-------------------------------------------------------------Finish off box
+
+    stx GRP0            ;turn players off
+    stx GRP1            ;
+
+    sta WSYNC           ;begin scanline 191, last line!
+
+
+    ldx #$FF            ;+2  2  restore stack
+    txs                 ;+2  4
+
+                        ;whew!  Now we gotta do it all over again 1/60 second
+                        ;from now.  I never appreciated how hard the 2600
+                        ;processor works until writing this thing =)
+
+;=========================================================================
+;Overscan - We have 30 scanlines during which to set up for the next frame
+;=========================================================================
+
+OverScan                ;
+    sta WSYNC           ;end scanline 191, begin overscan
+
+    lda #0              ;clear playfield from drawing the box
+    sta PF0             ;
+    sta PF1             ;
+    sta PF2             ;
+
+    lda VideoMode       ;skip 25 lines if in PAL-50 mode
+    and #%00000010
+    beq Hertz60$
+    ldx #25
+Hertz50$
+    sta WSYNC
+    dex
+    bne Hertz50$    
+    
+Hertz60$
+
+    LDA #33         ;Set timer to activate during the last line of overscan.
+    STA TIM64T          ;
+    LDA #2              ;
+    STA VBLANK          ;
+
+
+    jsr RandomBit       ;Advance the random number generator an extra time
+                        ;to keep the randomness of the stream.
+
+    lda #$08
+    bit GameOver        ;
+    beq L1              ;NoCollision out of range for conditional jumps
+    jmp NoCollision     ;Don't check for hits on invaders if game over.
+
+;-----------------------------------If the shields weren't drawn this frame, zero them out
+;so that they don't reappear
+
+L1  lda Temp2
+    bpl L2$
+    
+    ;if we got here, kill all the shields.
+    
+    ldx #15
+    lda #0
+L4$ sta Shields,X
+    dex
+    bpl L4$
+    
+;-----------------------------------Check for player death and set PauseTimer if so
+;Collisions could not be generated below the player-sprites area, so we can just
+;directly check the collision registers here
+
+L2$ lda CXP0FB
+    and #%01000000
+    beq NoP0Death
+    
+    lda Player0Lives
+    bmi NoP0Death       ;sanity check
+    
+    lda #1
+    sta WhichPlayerDied
+    jmp CommonDeathCode
+    
+NoP0Death
+    lda CXP1FB
+    and #%01000000
+    beq NoP1Death
+    
+    lda Player1Lives
+    bmi NoP1Death       ;sanity check
+    
+    lda #2
+    sta WhichPlayerDied
+    
+CommonDeathCode    
+    lda #0
+    sta EnemyBombs
+    sta EnemyBombs+2
+
+    lda #180
+    sta PauseTimer
+    
+NoP1Death
+
+;-----------------------------------------------Check for hits on invaders
+; ...or Saucer (PC)
+
+
+    bit invhit
+    bvc SaucerNotHit
+    
+    lda SaucerTimeHi    
+    cmp #$C0            ;do not hit saucer if it was displaying as points instead
+    beq SaucerNotHit    ;
+    
+    lda #180            ;saucer was hit (earlier we checked CXM1P and stored it in invhit - that was Piero's doing)
+    sta SaucerTime
+    lda #$C0
+    sta SaucerTimeHi    ;signal
+
+    lda CurrMissile     ;0 if left player's missile is active, 1 if right player's
+    asl
+    asl
+    asl
+
+    tay                 ;Player memory offset (0 or 8) is in Y
+
+
+    ldx Player0ShotCount,Y  ;we have the shot number
+    
+    lda saucersequence-1,X    ;0,1,2,3 for 50,100,150,300 points   
+    tax
+    stx SaucerPoints
+    inc SaucerPoints
+    
+    lda saucerscores,X       ;this is how much score to add
+    and #%00001111          ;tens digit
+    sta Temp1
+    lda Player0Score+2,Y
+    clc
+    adc Temp1
+    sta Player0Score+2,Y
+    
+    lda saucerscores,X       ;hundreds digit
+    lsr                     ;shift it over from upper BCD nibble
+    lsr
+    lsr
+    lsr
+    ;sta Temp1
+    ;lda Player0Score+1,Y
+    adc Player0Score+1,Y    ;carry is already clear from the 4th shift
+    sta Player0Score+1,Y
+   
+    lda #$42
+    sta fx1
+    jmp NormalizeScores
+    
+SaucerNotHit
+    ldy CurrMissile    
+    lda Player0MS,Y
+    beq NotExpl
+    jmp NoCollision     ;do not hit invader if a missle explosion is in progress
+
+NotExpl
+    lda invhit
+    bmi InvWasHit
+    jmp NoCollision
+
+;-------------------------------------------------------An invader was hit
+
+InvWasHit
+    lda CurrMissile     ;Use Y as an index.. it will = 0 if player 0's
+    asl                 ;missile is active, = 8 if player 1.
+    asl
+    asl
+    tay
+    sty Temp3           ;((Player0MY-TopLine)+2)/12 gives row (0-4) of
+    lda Player0MY,Y     ;invader that got hit.
+    sec
+    sbc TopLine
+    clc
+    adc #2
+    ldx #0
+D00
+    cmp #12
+    bmi D01
+    sec
+    sbc #12
+    inx 
+    jmp D00
+D01 txa                 ;A should now have row (0-4) that got hit.
+    sta Temp4           ;NEW -- store this to calc the score later
+    asl
+    asl
+    asl                 ;A now has index into Invaders of row that got hit.
+    sta Temp1           ;Temp1 points to start of row within Invaders
+
+    lda Player0MX,Y     ;Player0MX / 4 gives us index into hittable
+    lsr                 ;We want to apply the byte in hittable2 to
+    lsr                 ;the playfield register now in A.
+    tax                 ;X has which invader column got hit
+
+    lda [hittable],X    ;A now has which playfield byte to change (0-5)
+    clc
+    adc Temp1           ;A has index into Invaders of byte we want to change
+    tay                 ;Y has " " ".
+    lda [hittable2],X   ;A has value we want to AND with Invaders,Y
+
+    sta Temp2
+    eor #$FF            ;A has the bit the missile hit set
+    and Invaders,Y
+    bne NC0
+    jmp NoCollision     ;nobody there - false alarm
+NC0
+    lda Temp2
+    and Invaders,Y
+    sta Invaders,Y      ;done!
+
+    inx
+    lda [hittable],X
+    clc
+    adc Temp1
+    tay
+    lda [hittable2],X
+    and Invaders,Y
+    sta Invaders,Y
+
+    dex
+    dex
+    lda [hittable],X
+    clc
+    adc Temp1
+    tay
+    lda [hittable2],X
+    and Invaders,Y
+    sta Invaders,Y
+
+    dec InvLeft             ;one less invader
+
+    lda Saucer
+    bne notnow
+    lda #$52 ;pc
+    sta fx1 ;pc
+notnow:
+
+    
+    lda Temp4               ;NEW: Temp4 had the row of the invader (0-4 top to bottom I think)
+    clc
+    adc #1
+    lsr                     ;Now A has 0-2 corresponding to 30, 20, or 10 points
+    eor #$FF                ;Now has -1 to -3 corresponding to 30, 20, or 10 points
+    clc
+    adc #4                  ;Now it has 3, 2, or 1 corresponding to 30, 20, or 10 points.
+    sta Temp4
+
+    ldy Temp3               ;reload which player (0 for 0, 8 for 1)
+    lda Player0Score+2,Y    ;add points to the tens digit
+    clc
+    adc Temp4
+    sta Player0Score+2,Y
+
+;-----------------------------------------------------------Normalize scores.
+NormalizeScores
+    lda Player0Score+2,Y
+    cmp #10
+    bcc CheckHund           ;necessary because saucer can add multiple hundreds in one shot
+    
+IncHund
+    sbc #10                 ;subtract 10 from tens
+    sta Player0Score+2,Y
+
+    lda Player0Score+1,Y    ;add 1 to hundreds
+    clc
+    adc #01
+    sta Player0Score+1,Y
+
+CheckHund
+    lda Player0Score+1,Y
+    cmp #10
+    bcc DoneScore
+
+    sbc #10                 ;subtract 10 from hundreds
+    sta Player0Score+1,Y
+    lda Player0Score,Y
+    clc
+    adc #01                 ;add 1 to thousands
+    cmp #01
+    bne NS1
+    
+    sta Temp1               ;extra life at 1000 points
+    tya
+    tax
+    inc Player0Lives,X      ;stupid machine with no Inc address,Y operation
+    lda Temp1
+NS1
+    cmp #10
+    bcc NS0
+    lda #0                  ;roll over
+NS0 sta Player0Score,Y      
+
+DoneScore
+     LDY CurrMissile
+     LDA #4
+     STA Player0MS,Y
+
+;    lda #0 ;move elsewhere
+;    sta Player0MX,Y
+;    sta Player0MY,Y     ;only one kill per shot, sorry =)
+
+;-------------------------------------------------------------Set MinColor
+;If the lowest line of invaders is empty, decrement MinColor.  If that was
+;the top line of invaders, start a new board.
+
+NoCollision
+    lda #4
+    sec
+    sbc MinColor
+    asl
+    asl
+    asl                 ;A now index into Invaders matching the beginning
+                        ;of row [old MinColor].
+    tay
+    lda #0              ;A will be zero after ORs if row is empty.
+    ora Invaders+5,Y
+    ora Invaders+4,Y
+    ora Invaders+3,Y
+    ora Invaders+2,Y
+    ora Invaders+1,Y
+    ora Invaders+0,Y
+    bne MinColor1       ;if A not zero, there's an invader in current row
+
+    inc MinColor
+
+    lda MinColor
+    cmp #5
+    bne MinColor1       ;If we've gone through all five rows and still
+                        ;haven't found any invaders, the board is empty -
+    JSR BoardInit       ;let's start a new board.
+    
+    LDA #180            ;and set pause state for 3 seconds
+    STA PauseTimer
+    LDA #0
+    STA WhichPlayerDied
+
+
+MinColor1
+;---------------------------------------------Now, check for hits on shields by missiles
+
+    lda shldhitbyMissile
+    and #$C0            ;top two bits
+    beq NoCollision1    ;branch if missile 1 hit neither player
+
+    lda CurrMissile
+    asl
+    asl
+    asl                 ;0 or 8 according to missile drawn on just-ended frame
+    tay
+    lda Player0MX,Y     ;get missile X-coord
+    sec
+    sbc #29
+    sta Temp3           ;and save for later
+        
+    and #$07
+    tay                 ;Y = column (0-7) of shield that got hit
+    lda bitstable,Y     ;
+    eor #$FF            ;The bit set in A is the bit we're testing in the
+    sta Temp4           ;shield graphics.
+
+    lda Temp3
+    lsr
+    lsr
+    and #$F8            ;X now offset into Shields of beginning of shield
+    lsr
+    tax                 ;that got hit (0, 4, 8, or 12)
+
+SH0                     ;each line from bottom as we search
+    lda Shields,X
+    and Temp4           ;If nonzero, we found the row.
+    bne SH1
+    inx                 ;next row
+    txa
+    and #$03            ;check bottom three bits
+    bne SH0             ;if zero, we didn't find a set pixel in the column.
+    jmp NoCollision1    ;so skip it
+
+SH1                     ;X has index into Shields of byte in question.
+    lda Temp4
+    eor #$FF            ;A has value to AND with Shields,X
+    and Shields,X
+    sta Shields,X
+
+    lda CurrMissile
+    asl
+    asl
+    asl
+    tay
+    lda #0
+    sta Player0MX,Y
+    sta Player0MY,Y
+
+NoCollision1
+
+;---------------------------------------------Now, check for hits on shields by bombs
+
+    LDA shldhitbyBomb
+    AND #%01000000
+    BEQ NoCollisionP
+
+    lda EnemyBombsX     ;get bomb X-coord
+    sec
+    sbc #29
+    sta Temp3           ;and save for later
+
+    and #$07
+    tay
+    lda bitstable,Y
+    eor #$FF
+    sta Temp4
+    
+    lda Temp3
+    lsr
+    lsr
+    and #$F8
+    lsr                 ;A now offset into Shields of beginning of shield that got hit (0, 4, 8, or 12)
+    clc
+    adc #3              ;now it's the end of that shield (shields are stored bottom-to-top)
+    tax                 
+    
+SH2                     ;each line from top as we search
+    lda Shields,X
+    and Temp4           ;If nonzero, we found the first row in this column that still has a pixel undestroyed
+    bne SH3
+    dex                 ;next row
+    txa
+    and #$03            
+    cmp #$03            ;if the bottom two bits are 11, we decremented past the beginning of this shield
+    bne SH2             ;that means we didn't find a set pixel in the column (this should never happen, it's a sanity check)
+    jmp NoCollisionP    ;so skip it
+
+SH3                     ;X has index into Shields of byte in question.
+    lda Temp4
+    eor #$FF            ;A has value to AND with Shields,X
+    and Shields,X
+    sta Shields,X
+
+    lda #0
+    sta EnemyBombs
+    sta EnemyBombs+2
+    
+NoCollisionP:
+EndOverscan             ;
+    LDA INTIM           ;
+    BNE EndOverscan     ;no STA WSYNC here because there's one at the
+                        ;beginning of Vertical Blank.
+
+    JMP  MainLoop      ;Continue forever.
+
+;=========================================================================
+;Game Init - initialize stuff to start a new game
+;=========================================================================
+GameInit                ;
+
+    LDA #2              ;
+    STA Player0Lives    ;
+    sta Player1Lives
+
+    lda CurrentGame
+    and #$01
+    bne GI0             ;branch if 2-player game
+    lda #$FF            ; -1
+    sta Player1Lives
+GI0
+    LDA #0              ;
+    STA Player0Score    ;
+    STA Player1Score    ;
+    STA Player0Score+1  ;
+    STA Player1Score+1  ;
+    sta Player0Score+2
+    sta Player1Score+2
+    sta CurrentWave
+    lda #60
+    sta PauseTimer
+
+    JSR BoardInit
+
+    RTS                 ;
+
+BoardInit
+    ;1101 10110110 11011011 0110 11011011 00000000
+    ;1011 10110110 11011011 0110 11011011 00000000
+
+    ;$B0 $B6 $DB $60 $DB $00
+
+    ;$90 $24 $49 $20 $92 $00 $-- $--
+
+    LDA #$B0            ;
+    STA Invaders        ;
+    STA Invaders+8      ;
+    STA Invaders+16     ;
+    STA Invaders+24     ;
+    STA Invaders+32     ;
+    LDA #$B6            ;
+    STA Invaders+1      ;
+    STA Invaders+9      ;
+    STA Invaders+17     ;
+    STA Invaders+25     ;
+    STA Invaders+33     ;
+    LDA #$DB            ;
+    STA Invaders+2      ;
+    STA Invaders+10     ;
+    STA Invaders+18     ;
+    STA Invaders+26     ;
+    STA Invaders+34     ;
+    ;LDA #$DB            ;
+    STA Invaders+4      ;
+    STA Invaders+12     ;
+    STA Invaders+20     ;
+    STA Invaders+28     ;
+    STA Invaders+36     ;
+    LDA #$60            ;
+    STA Invaders+3      ;
+    STA Invaders+11     ;
+    STA Invaders+19     ;
+    STA Invaders+27     ;
+    STA Invaders+35     ;
+    LDA #$00            ;
+    STA Invaders+5      ;
+    STA Invaders+13     ;
+    STA Invaders+21     ;
+    STA Invaders+29     ;
+    STA Invaders+37     ;
+    STA Direction       ;
+
+    sta FrameCount
+    sta MinColor
+    sta fx0              ;otherwise sound effects get stuck on if game is reset during them
+    sta fx1
+    sta WhichPlayerDied
+
+    sta Saucer
+    ;sta Player0MX
+    sta Player0MY
+    ;sta Player1MX
+    sta Player1MY
+    sta EnemyBombs
+    sta EnemyBombs+1    
+
+    LDA #12             ;
+    STA Player0Pos      ;
+    LDA #141            ;
+    STA Player1Pos      ;
+
+    lda #55
+    sta InvLeft
+
+    LDA #61             ;
+    STA FramesLeft      ;
+
+    sta BombDelay
+
+    LDY CurrentWave     ;CurrentWave starts at 0, increases to 8, when it reaches 9 reset to 0
+    LDA TopLineTable,Y
+    STA TopLine         ;
+
+    lda #%11000011
+    sta Shields
+    sta Shields+4
+    sta Shields+8
+    sta Shields+12
+
+    lda #%11111111
+    sta Shields+1
+    sta Shields+5
+    sta Shields+9
+    sta Shields+13
+
+    STA Player0ShotCount    ;-1
+    STA Player1ShotCount    ;-1
+
+    lda #%01111110
+    sta Shields+2
+    sta Shields+6
+    sta Shields+10
+    sta Shields+14
+
+    lda #%00111100
+    sta Shields+3
+    sta Shields+7
+    sta Shields+11
+    sta Shields+15
+
+    
+    lda #<1500           ;1500 is 25 * 60 which is time between saucers
+    sta SaucerTime
+    lda #>1500
+    sta SaucerTimeHi
+    
+    lda #<playerpict
+    sta Player0Ptr
+    sta Player1Ptr
+    
+    lda #>playerpict
+    sta Player0Ptr+1
+    sta Player1Ptr+1
+    
+    clc
+    lda CurrentWave
+    adc #1
+    cmp #9
+    bne NoInc$
+    lda #0
+NoInc$
+    sta CurrentWave
+    
+    RTS
+
+;=========================================================================
+;Misc routines (random number generator)
+;=========================================================================
+
+RandomBit
+    lda Rand4
+    asl
+    asl
+    asl
+    eor Rand4
+    asl
+    asl
+    rol Rand1
+    rol Rand2
+    rol Rand3
+    rol Rand4
+    rts
+
+RandomByte
+    ldx #8
+RandomByte1
+    jsr RandomBit
+    dex
+    bne RandomByte1
+    lda Rand1
+    rts
+
+
+Hconvert
+       STA    Temp1
+       BPL    LF34B
+       CMP    #$9E
+       BCC    LF34B
+       LDA    #$00
+       STA    Temp1
+LF34B  LSR
+       LSR
+       LSR
+       LSR
+       TAY
+       LDA    Temp1
+       AND    #$0F
+Memory0F = * - 1      ;this points to the $0F, used for a BIT instruction       
+       STY    Temp1
+       CLC
+       ADC    Temp1
+       CMP    #$0F
+       BCC    LF360
+       SBC    #$0F
+       INY
+LF360  CMP    #$08
+       EOR    #$0F
+       BCS    LF369
+       ADC    #$01
+       DEY
+LF369  INY
+       ASL
+       ASL
+       ASL
+       ASL
+       STA    Temp1
+       TYA
+       ORA    Temp1
+       RTS
+
+
+
+;=========================================================================
+;Data area - store patterns for graphics, etc.
+;=========================================================================
+    org $FD88
+
+saucerpict
+    .byte %00000000
+    .byte %01000010
+    .byte %11011011
+    .byte %11111111
+    .byte %10100101
+    .byte %11111111
+    .byte %01111110
+    .byte %00111100
+
+saucerpointsimages
+    .byte %00000000
+    .byte %01110111
+    .byte %00010101
+    .byte %00010101
+    .byte %01110101
+    .byte %01000101
+    .byte %01000101
+    .byte %01110111
+
+    .byte %00000000
+    .byte %01011111
+    .byte %01010101
+    .byte %01010101
+    .byte %01010101
+    .byte %01010101
+    .byte %11010101
+    .byte %01011111
+
+    .byte %00000000
+    .byte %10110111
+    .byte %10010101
+    .byte %10010101
+    .byte %10110101
+    .byte %10100101
+    .byte %10100101
+    .byte %10110111
+
+    .byte %00000000
+    .byte %11011111
+    .byte %01010101
+    .byte %01010101
+    .byte %11010101
+    .byte %01010101
+    .byte %01010101
+    .byte %11011111
+
+soundseq1
+    .byte $00, $D1, $91, $91, $D1, $95, $9B, $D1
+
+livestable  ;these are NUSIZ values for the number of lives a player has
+    .byte 0     ;1 lives - 1 copy
+    .byte 1     ;2 lives - 2 copies
+    .byte 3     ;3 lives - 3 copies
+
+playerpict              ;
+    .byte %11111110     ;
+    .byte %11111110     ;
+    .byte %11111110     ;
+    .byte %01111100     ;
+    .byte %00010000     ;
+    .byte %00010000     ;
+
+playerexpl1
+    .byte %10111110
+    .byte %01111110
+    .byte %10010000
+    .byte %00101010
+    .byte %10010001
+    .byte %01001000
+    
+playerexpl2 
+    .byte %11111100
+    .byte %01111110
+    .byte %01010100
+    .byte %00110001
+    .byte %01010100
+    .byte %10100000
+
+playerpictblank
+    .byte %00000000
+    .byte %00000000
+    .byte %00000000
+    .byte %00000000
+    .byte %00000000
+    ;a sixth zero is needed but it's right there in EXPSEQ   
+
+EXPSEQ
+    .byte $0, %00010000, %00100000, %00110000, %00110000
+
+TopLineTable
+    .byte 53, 65, 71, 77, 77, 77, 83, 83, 83
+
+ADJSEQ
+    .byte 0,1,2,4,4
+
+S50 = 0
+S100 = 1
+S150 = 2
+S300 = 3
+
+saucersequence
+    .byte S100, S150, S50, S100, S150, S50, S100
+    .byte S50, S100, S150, S50, S100, S150, S50, S100, S50, S100, S50, S100, S150, S50, S300
+
+;saucer scores in BCD without dummy zero
+saucerscores
+    .byte $05, $10, $15, $30
+    
+scorecheck    
+    .byte %00000101
+
+    org $FE00
+
+;patterns - row, frame, PFx
+
+p00 = %10010000
+p01 = %00100100
+p02 = %01001001
+p03 = %00100000
+p04 = %10010010
+p05 = %10010010
+
+p10 = %00100000
+p11 = %10010010
+p12 = %10010010
+p13 = %01000000
+p14 = %01001001
+p15 = %00100100
+
+p20 = %01000000
+p21 = %01001001
+p22 = %00100100
+p23 = %10010000
+p24 = %00100100
+p25 = %01001001
+
+p30 = %11110000
+p31 = %11111111
+p32 = %11111111
+p33 = %11110000
+p34 = %11111111
+p35 = %11111111
+
+p40 = 0
+p41 = 0
+p42 = 0
+p43 = 0
+p44 = 0
+p45 = 0
+
+ptable
+    .byte p00,p01,p02,p03,p04,p05    ;first line frame 0
+    .byte p00,p01,p02,p03,p04,p05    ;second line, frame 0
+
+    .byte p10,p11,p12,p13,p14,p15    ;first line frame 1
+    .byte p10,p11,p12,p13,p14,p15    ;second line frame 1
+
+    .byte p10,p11,p12,p13,p14,p15    ;first line frame 2
+    .byte p10,p11,p12,p13,p14,p15    ;second line frame 2 
+
+    .byte p20,p21,p22,p23,p24,p25    ;first line frame 3
+    .byte p20,p21,p22,p23,p24,p25    ;second line frame 3
+
+    .byte p20,p21,p22,p23,p24,p25    ;first line frame 4
+    .byte p20,p21,p22,p23,p24,p25    ;second line frame 4
+
+    .byte p00,p01,p02,p03,p04,p05    ;first line frame 5
+    .byte p00,p01,p02,p03,p04,p05    ;second line, frame 5
+
+
+    .byte p30,p31,p32,p33,p34,p35    ;first line frame 0
+    .byte p40,p41,p42,p43,p44,p45    ;second line, frame 0
+
+    .byte p00,p01,p02,p03,p04,p05    ;first line frame 1
+    .byte p10,p11,p12,p13,p14,p15    ;second line frame 1
+
+    .byte p40,p41,p42,p43,p44,p45    ;first line frame 2
+    .byte p30,p31,p32,p33,p34,p35    ;second line frame 2
+
+    .byte p40,p41,p42,p43,p44,p45    ;first line frame 3
+    .byte p30,p31,p32,p33,p34,p35    ;second line frame 3
+
+    .byte p00,p01,p02,p03,p04,p05    ;first line frame 4
+    .byte p20,p21,p22,p23,p24,p25    ;second line frame 4
+
+    .byte p30,p31,p32,p33,p34,p35    ;first line frame 5
+    .byte p40,p41,p42,p43,p44,p45    ;second line, frame 5
+
+
+    .byte p00,p01,p02,p03,p04,p05    ;first line frame 0
+    .byte p00,p01,p02,p03,p04,p05    ;second line, frame 0
+
+    .byte p10,p11,p12,p13,p14,p15    ;first line frame 1
+    .byte p10,p11,p12,p13,p14,p15    ;second line frame 1
+
+    .byte p10,p11,p12,p13,p14,p15    ;first line frame 2
+    .byte p10,p11,p12,p13,p14,p15    ;second line frame 2
+
+    .byte p20,p21,p22,p23,p24,p25    ;first line frame 3
+    .byte p20,p21,p22,p23,p24,p25    ;second line frame 3
+
+    .byte p20,p21,p22,p23,p24,p25    ;first line frame 4
+    .byte p20,p21,p22,p23,p24,p25    ;second line, frame 4
+
+    .byte p00,p01,p02,p03,p04,p05    ;first line frame 5
+    .byte p00,p01,p02,p03,p04,p05    ;second line frame 5
+
+
+;four color options: NTSC, PAL, NTSC with invisible invaders, PAL with invis invaders
+
+P0Color
+    .byte $CC, $5C, $CC, $5C
+P1Color
+    .byte $38, $48, $38, $48
+SaucerColor
+    .byte $48, $6A, $48, $6A
+ShieldsAndMissileColor
+    .byte $CC, $5C, $CC, $5C
+colortable  ;5 rows/colors - these are for COLUPF
+    .byte $18, $2A, $00, $00, $1A, $2C, $00, $00, $5A, $8A, $00, $00, $5C, $8C, $00, $00, $CE, $5E, $00, $00
+PFColor     ;for "earth" - light blue
+    .byte $8C, $DC, $8C, $DC
+
+    ;and that is exactly 256 bytes used on that page
+
+    org $FF00           ;
+
+numbertable
+
+n00 = %11101110     
+n01 = %10101010
+n02 = %10101010
+n03 = %10101010
+n04 = %11101110
+
+n05 = %00000111     
+n06 = %00000101
+n07 = %00000101
+n08 = %00000101
+n09 = %00000111
+
+n10 = %01000100
+n11 = %11001100
+n12 = %01000100
+n13 = %01000100
+n14 = %11101110
+
+n15 = %00000010
+n16 = %00000011
+n17 = %00000010
+n18 = %00000010
+n19 = %00000111
+
+n20 = %11101110
+n21 = %00100010
+n22 = %11101110
+n23 = %10001000
+n24 = %11101110
+   
+n25 = %00000111
+n26 = %00000100
+n27 = %00000111
+n28 = %00000001
+n29 = %00000111
+
+n30 = %11101110
+n31 = %00100010
+n32 = %11101110
+n33 = %00100010
+n34 = %11101110
+
+n35 = %00000111
+n36 = %00000100
+n37 = %00000111
+n38 = %00000100
+n39 = %00000111
+
+n40 = %10101010
+n41 = %10101010
+n42 = %11101110
+n43 = %00100010
+n44 = %00100010
+
+n45 = %00000101
+n46 = %00000101
+n47 = %00000111
+n48 = %00000100
+n49 = %00000100
+   
+n50 = %11101110
+n51 = %10001000
+n52 = %11101110
+n53 = %00100010
+n54 = %11101110
+
+n55 = %00000111
+n56 = %00000001
+n57 = %00000111
+n58 = %00000100
+n59 = %00000111
+
+n60 = %11101110
+n61 = %10001000
+n62 = %11101110
+n63 = %10101010
+n64 = %11101110
+
+n65 = %00000111
+n66 = %00000001
+n67 = %00000111
+n68 = %00000101
+n69 = %00000111
+
+n70 = %11101110
+n71 = %00100010
+n72 = %00100010
+n73 = %00100010
+n74 = %00100010
+
+n75 = %00000111
+n76 = %00000100
+n77 = %00000100
+n78 = %00000100
+n79 = %00000100
+
+n80 = %11101110
+n81 = %10101010
+n82 = %11101110
+n83 = %10101010
+n84 = %11101110
+
+n85 = %00000111
+n86 = %00000101
+n87 = %00000111
+n88 = %00000101
+n89 = %00000111
+
+n90 = %11101110
+n91 = %10101010
+n92 = %11101110
+n93 = %00100010
+n94 = %11101110
+
+n95 = %00000111
+n96 = %00000101
+n97 = %00000111
+n98 = %00000100
+n99 = %00000111
+
+    .byte n00,n10,n20,n30,n40,n50,n60,n70,n80,n90,0   ;First lines of 0-9, dummy zero
+    .byte n05,n15,n25,n35,n45,n55,n65,n75,n85,n95,%01110000  ;First lines of 0-9 reversed
+    .byte n01,n11,n21,n31,n41,n51,n61,n71,n81,n91,0
+    .byte n06,n16,n26,n36,n46,n56,n66,n76,n86,n96,%01010000
+    .byte n02,n12,n22,n32,n42,n52,n62,n72,n82,n92,0
+    .byte n07,n17,n27,n37,n47,n57,n67,n77,n87,n97,%01010000
+    .byte n03,n13,n23,n33,n43,n53,n63,n73,n83,n93,0
+    .byte n08,n18,n28,n38,n48,n58,n68,n78,n88,n98,%01010000
+    .byte n04,n14,n24,n34,n44,n54,n64,n74,n84,n94,0   ;Last lines of 0-9
+    .byte n09,n19,n29,n39,n49,n59,n69,n79,n89,n99,%01110000  ;Last lines of 0-9 reversed
+
+advancetable            ;that was 110 bytes, we have 146 left
+    .byte 255           ;this is invleft = 0; should not happen
+    .byte 2             ;Actually, we add one when we initialize FramesLeft
+    .byte 4             ;and subtract 2 every frame; when it equals 1, 
+    .byte 4             ;advance FrameCount and re-initialize FramesLeft.
+    .byte 6,6
+    .byte 8,8,8
+    .byte 10,12,14      ;9-11
+    .byte 18,20,24      ;12-14
+    .byte 30,30,30,30,30,30 ;15-20
+    .byte 40,40,40,40,40,40 ;21-26
+    .byte 60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60
+    .byte 60,60,60,60,60,60,60,60
+
+hittable                ;that was another 56 bytes; 90 left
+    .byte 0,0,0,0,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2
+    .byte 3,3,3,3,4,4,4,4,4,4,4,4,5,5,5,5,5,5,5,5
+
+hittable2
+    .byte $EF,$DF,$BF,$7F
+bitstable
+    .byte $7F,$BF,$DF,$EF,$F7,$FB,$FD,$FE
+    .byte $FE,$FD,$FB,$F7,$EF,$DF,$BF,$7F
+    .byte $EF,$DF,$BF,$7F
+    .byte $7F,$BF,$DF,$EF,$F7,$FB,$FD,$FE
+    .byte $FE,$FD,$FB,$F7,$EF,$DF,$BF,$7F
+
+;offset now equals $FFF6 - remember to avoid $FFF8
+
+;Starting positions for PC
+    org $FFFC           ;
+    .word Start         ;
+    .word Start         ;
