@@ -1,0 +1,99 @@
+Skeleton
+(C) 2002 Eric Ball
+
+1. STORY
+
+"You are in a maze of twisty passages, all alike" certainly 
+describes the situation you are in.  
+
+You hear faint footsteps, so you follow the sound through the 
+maze.  To your horror, you discover the source of the footsteps 
+is a Skeleton; and it doesn't look friendly.  Acting quickly, 
+you blast it with your Undead Disintegrator and the Skeleton 
+vanishes in a flash of colour.  But as you reload your UD, you 
+hear footsteps again; and you wonder; are you the hunter or the 
+hunted in this nightmare?
+
+2. GAMEPLAY
+
+NOTE: Skeleton is for one player only and sound is required.
+
+The objective of Skeleton is to eliminate 80 Skeletons without 
+being eliminated.  Use your Joystick Controller to manuver your 
+way through the maze.  Press the red controller (fire) button 
+to shoot your Undead Disintegrator at a Skeleton.  When a 
+Skeleton is destroyed, another will take it's place.  Destroy 
+ten Skeletons and you will enter the next maze.  Complete all 
+eight mazes to win your freedom.  Touch or be touched by a 
+Skeleton and the game is over.
+
+Each new Skeleton is stronger than the previous and will 
+require more hits from your Undead Disintegrator to be 
+destroyed.  You are also not a dead shot with the Undead 
+Disintegrator so sometimes a Skeleton will require more shots 
+to be destroyed.  Although each new Skeleton starts moving 
+slowly, the speed with which the Skeleton moves will gradually 
+increase until it is destroyed.
+
+Sound is critical for playing Skeleton.  The sound of the 
+Skeleton's footsteps will get louder the closer the Skeleton is 
+to you.  The sound will also be louder if the Skeleton is in 
+front of you and quieter if the Skeleton is behind you.  If 
+your ATARI Video Computer System is capable of producing stereo 
+then you will be able to hear if the Skeleton is to the right 
+or left of you as well.
+
+3. USING THE CONTROLLERS 
+
+Use your Joystick Controller with this ATARI Game Program 
+cartridge. Be sure to plug the controller cables firmly into 
+the jacks at the back of your Video Computer System game. Hold 
+the controller with the red fire button to your upper left 
+toward the television screen. Use the LEFT CONTROLLER jack for 
+this one-player game. See Section 3 of your owner's manual for 
+further details. 
+
+Use the Joystick Controller to: 
+
+- Move through the maze 
+- Shoot your Undead Disintegrator
+
+Push the Joystick forward to move forward, push the Joystick to 
+the right to turn right and push the joystick to the left to 
+turn left.  You must return the Joystick to the center before 
+each move.
+
+Press the red button to shoot your Undead Disintegrator.  You 
+must release the red button to shoot again.  It requires one 
+second to reload your Undead Disintegrator.
+
+4. CONSOLE CONTROLS 
+
+GAME SELECT SWITCH
+GAME RESET SWITCH
+Press down either the GAME SELECT or RESET switch to start the 
+game.  Pressing either the GAME SELECT or RESET switch during 
+the game has no effect.
+
+TV TYPE SWITCH
+DIFFICULTY SWITCHES
+The TV TYPE and DIFFICULTY switches are not used in this game.
+
+5. LEGAL STUFF
+
+Permission is granted to distribute the ROM code for the Atari 
+2600 game, Skeleton, provided that this text file is included 
+with the code.  Skeleton may be included on websites and 
+shareware or freeware compilations, but please contact Eric 
+Ball first. 
+
+The end user is granted permission to use the ROM code with an 
+emulator, or to make a single cartridge for use with their 
+Atari 2600 system, or use a RAM cartridge such as a Cuttle Cart 
+or Supercharger if they have that capability.
+
+Permission is NOT granted for any individual to manufacture or 
+distribute cartridge versions of the ROM code for another end 
+user under any circumstances.
+
+Skeleton (C) 2002 Eric Ball, all other rights reserved
