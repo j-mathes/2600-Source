@@ -1,0 +1,534 @@
+    include vcs2600.h
+    org $1000
+
+;RAM locations
+
+MazePointer = $80      ;offset of maze data for current row
+RowPointer = $82       ;16-bit pointer to data for current row
+SpritePointer = $84    ;16-bit pointer to gfx data for current sprite
+ScreenPointer = $86    ;16-bit pointer to data for current screen
+
+CurrentScreen  = $88   ;current screen number
+CurrentRow     = $89   ;current row number within block, decrements 4-3-2-1
+PlayerX        = $8A   ;player-X, 0 to 19
+PlayerY        = $8B   ;player-Y, 0 to 13
+FramesToMove   = $8C
+
+Temp1 = $F6
+Temp2 = $F7
+Temp3 = $F8
+Temp4 = $F9
+
+Start
+    SEI  ; Disable interrupts, if there are any.
+    CLD  ; Clear BCD math bit.
+    LDX  #$FF
+    TXS  ; Set stack to top of RAM.
+    LDA #0  ;Zero everything except VSYNC.
+V1  STA 0,X
+    DEX
+    BNE V1
+    LDA #$00
+    STA SWACNT  ;set data direction registers to input
+    STA SWBCNT
+
+    lda #12
+    sta PlayerX
+    sta PlayerY
+
+    JSR  GameInit
+
+MainLoop
+    JSR  VerticalBlank ;Execute the vertical blank.
+    JSR  CheckSwitches ;Check console switches.
+    JSR  GameCalc      ;Do calculations during Vblank
+    JSR  SetupScreen
+    JSR  DrawScreen    ;Draw the screen
+    JSR  OverScan      ;Do more calculations during overscan
+    JMP  MainLoop      ;Continue forever.
+
+
+VerticalBlank          ;Beginning of the frame - at the end of overscan.
+    LDA  #2            ;VBLANK was set at the beginning of overscan.
+    STA  WSYNC
+    STA  VSYNC ;Begin vertical sync.
+    STA  WSYNC ;First line of VSYNC
+    STA  WSYNC ;Second line of VSYNC.
+    LDA #44    ;Set timer to activate during the last line of VBLANK.
+    STA TIM64T
+    LDA #0
+    STA  WSYNC ; Third line of VSYNC.
+    STA  VSYNC ; Writing zero to VSYNC ends vertical sync period.
+    RTS
+
+
+CheckSwitches
+    dec FramesToMove
+    bpl M3
+    lda #0
+    sta FramesToMove
+
+    ldx #10         ;for FramesToMove
+    
+    lda SWCHA
+    tay
+    bmi M0
+    inc PlayerX     ;move right
+    stx FramesToMove
+M0  and #$40
+    bne M1
+    dec PlayerX     ;move left
+    stx FramesToMove
+M1  tya
+    and #$20
+    bne M2
+    inc PlayerY     ;move down
+    stx FramesToMove
+M2  tya
+    and #$10
+    bne M3
+    dec PlayerY     ;move up
+    stx FramesToMove
+M3
+
+
+
+    RTS
+
+
+GameCalc
+    RTS
+
+SetupScreen
+
+    ;lda CurrentScreen        ;get currentscreen address
+
+    ldy #0
+    sty ScreenPointer
+    lda #$13
+    sta ScreenPointer+1    ;for now, screen starts at $1300
+ 
+    lda (ScreenPointer),Y  ;get mazetype
+    sta MazePointer
+
+    ldy #3
+    lda (ScreenPointer),Y  ;low byte of block pointer
+    sta RowPointer
+    iny
+    lda (ScreenPointer),Y  ;high byte of block pointer
+    sta RowPointer+1
+
+    lda PlayerY
+    sta Temp4
+
+    ldx PlayerX
+    sta WSYNC
+    lda HorzTable,X     ;+4  4
+    sta HMCLR           ;+3  7
+    sta HMP0            ;+3 10
+    and #$0F            ;+2 12
+    tax                 ;+2 14
+P00 dex                 ;+2 16
+    bpl P00             ;+2 18
+    sta RESP0           ;+3 (21 + x*5)
+    sta WSYNC
+    sta HMOVE
+
+
+    RTS
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+DrawScreen
+    LDA INTIM
+    BNE DrawScreen
+    STA WSYNC      ;begin scanline 0
+    STA VBLANK     ;here we go!
+
+    sta COLUPF
+    sta COLUBK
+    sta GRP1
+    sta COLUP1
+
+    ldx #31        ;Skip the top (status-bar)
+DoStatus
+    dex
+    sta WSYNC      ;begin scanlines 1 through 31
+    bpl DoStatus
+
+DoScreen           ;this happens during scanline 31
+
+    ldy #1
+    sty CTRLPF
+    lda (ScreenPointer),Y
+    sta COLUPF
+    iny
+    lda (ScreenPointer),Y
+    sta COLUBK
+    jsr DoABlock        ;+xx 29  First block
+
+                        ;For first special, Rowpointer must equal
+                        ;ScreenPointer+5.
+    lda ScreenPointer   ;+3  32 
+    clc                 ;+2  34
+    adc #5              ;+2  36
+    sta RowPointer      ;+3  39
+    lda ScreenPointer+1 ;+3  42
+    adc #00             ;+2  44
+    sta RowPointer+1    ;+3  47
+    jsr DoRow              ;first special
+
+    ldy #8
+    lda (ScreenPointer),Y
+    sta RowPointer
+    iny
+    lda (ScreenPointer),Y
+    sta RowPointer+1
+    jsr DoABlock           ;second block
+
+    lda ScreenPointer
+    clc
+    adc #10
+    sta RowPointer
+    lda ScreenPointer+1
+    adc #00
+    sta RowPointer+1
+    jsr DoRow              ;second special
+
+    ldy #13
+    lda (ScreenPointer),Y
+    sta RowPointer
+    iny
+    lda (ScreenPointer),Y
+    sta RowPointer+1
+    jsr DoABlock           ;third block
+
+    RTS
+
+; Here, RowPointer should always be a 16-bit pointer to the start of
+; the current row.
+
+DoABlock
+
+    lda #4
+    sta CurrentRow
+
+B00 jsr DoRow
+
+    dec CurrentRow
+    bne B00
+
+    rts
+
+DoRow
+    sta WSYNC       ;begin line 0 of row
+
+    ldx MazePointer     ;+3   3
+    lda MazeData,X      ;+4   7 ;get PF0 for row
+    sta PF0             ;+3  10
+    lda MazeData+1,X    ;+4  14 ;get PF1
+    sta PF1             ;+3  17
+    lda MazeData+2,X    ;+4  21
+    sta PF2             ;+3  24
+
+    ldy #0              ;+2  26
+    sty GRP0            ;+3  29
+    sty GRP1            ;+3  32
+    lda (RowPointer),Y  ;+5  37   get address of sprite data
+    tax                 ;+2  39
+    and #$F0            ;+2  41   top 4 bits
+    sta SpritePointer   ;+3  44
+    txa                 ;+2  46
+    and #$0F            ;+2  48   bottom 4 bits
+    clc                 ;+2  50
+    adc #$1C            ;+2  52   base page $1C
+    sta SpritePointer+1 ;+3  55   SpritePointer set.
+
+    sta HMCLR           ;+3  58    
+    iny                 ;+2  60   (RowPointer,Y) points to horz pos
+    lda (RowPointer),Y  ;+5  65   get 0-19 x-position
+    tax                 ;+2  67
+    lda HorzTable,X     ;+4  71
+
+    sta WSYNC           ;start
+    sta HMP1            ;+3   3
+    and #$0F            ;+2   5
+    tax                 ;+2   7
+    cpx #5              ;+2   9     If x is 4 or lower, set position, then
+    bpl R01             ;+2  11     write NUSIZ and reflect.  If x >=5,
+    sta Temp1           ;+3  14    do the other stuff first.
+R00 dex                 ;+2  16
+    bpl R00             ;when branch not taken: +2 (18 + x*5)
+    sta RESP1           ;(21 + x*5), maximum 41
+
+R01 iny                 ;+2  46 or 14
+    lda (RowPointer),Y  ;+5  51    19
+    sta NUSIZ1          ;+3  54    22
+    sta REFP1           ;+3  57    25
+    ldy #14             ;+2  59    27      preparing for eachline
+    txa                 ;+2  61    29
+    bmi R03             ;+2  63    31      if minus flag, we already resp1
+
+    sec                 ;+2  33
+    sbc #5              ;+2  35
+    tax                 ;+2  37
+    nop                 ;+2  39
+R02 dex                 ;+2  41 
+    bpl R02             ;when branch not taken: +2 (43 + x*5)
+    sta RESP1           ;(46 + x*5)
+
+                        ;This begins first of ten graphics lines.
+                        ;Still need to add 3 to RowPointer before next row
+
+R03
+    sta WSYNC           ;begin first line of pair
+    sta HMOVE           ;make sure the fine motion counted
+
+
+DoEachLine
+    lda (SpritePointer),Y
+    sta GRP1
+    dey
+    lda (SpritePointer),Y
+    sta COLUP1
+
+    ldx #0              ;this will be GRP0 for second line.
+
+    lda Temp4
+    bne NoPlayer
+
+    lda PlayerData+1,Y
+    sta GRP0
+    lda PlayerData,Y
+    sta COLUP0
+    lda PlayerData-1,Y
+    tax
+
+NoPlayer
+
+    dey
+    lda (SpritePointer),Y
+    dey
+    sta WSYNC           ;begin second line of pair
+    stx GRP0
+    sta GRP1
+    bmi DoneLines       ;if Y went negative, this was the last pair
+    sta WSYNC           ;begin first line of next pair
+    jmp DoEachLine      ;and continue
+
+DoneLines
+    lda RowPointer
+    clc
+    adc #03             ;carry was set
+    sta RowPointer
+    lda MazePointer
+    clc
+    adc #3
+    sta MazePointer
+
+    dec Temp4
+
+    RTS             ;from DoRow
+
+
+
+OverScan
+    LDA #35        ;Set timer to activate during the last line of overscan.
+    STA TIM64T
+    LDA #2
+    STA VBLANK
+    ;do other calculations here
+EndOverscan
+    LDA INTIM
+    BNE EndOverscan
+    STA WSYNC
+    RTS
+
+
+GameInit
+    RTS
+
+
+
+    org $1200
+;==========================================================================
+;Maze data.
+;PF0first, PF1, PF2 (* 14)
+
+MazeData
+    .byte $F0,$FF,$3F
+    .byte $F0,$FF,$0F
+    .byte $F0,$C0,$00
+    .byte $F0,$C0,$00
+    .byte $F0,$C0,$00
+    .byte $F0,$C0,$00
+    .byte $00,$00,$00
+    .byte $00,$00,$00
+    .byte $30,$00,$00
+    .byte $30,$00,$00
+    .byte $30,$00,$00
+    .byte $30,$00,$00
+    .byte $30,$00,$00
+    .byte $F0,$FF,$FF
+
+    org $1300
+;==========================================================================
+;Screen data.
+;Mazetype, COLUPF, COLUBK, Blk1addr, spec1, blk2addr, spec2, blk3addr,
+;Actiondatas
+;Mazetype: Offset within page for maze
+
+ScreenData
+    .byte 0, Brown+B1, Orange+B4, 0,$F8, $20,5,0, $0C,$F8, $10,16,Copy2C, $0C,$F8, 0,0
+
+
+
+    org $1800
+;==========================================================================
+;Data for blocks.
+;Gfxtype, Position (0-19), Action/NUSIZ/Reflect
+;Gfxtype: Top 4 bits is offset within page for graphic, bottom 4
+;is number of pages to add to base.
+
+
+BlockData
+    .byte 0,8,Copy2M
+    .byte 0,2,0
+    .byte 0,17,0
+    .byte $10,8,Copy2M+Reflect
+
+    .byte $10,8,Copy3W
+    .byte $10,5,Copy2M
+    .byte $10,3,Copy2W
+    .byte $10,2,Copy2M+Reflect
+
+
+    org $1C00
+;==========================================================================
+;Gfx data for sprites.
+;From bottom, (gfx color gfx) * 5
+
+Grey = %0
+Gold = %00010000
+Brown = %00100000
+Red = %00110000
+Pink = %01000000
+Purple = %01010000
+Violet = %01100000
+Blue = %10000000
+LBlue = %10010000
+Turquoise = %10100000
+GBlue = %10110000
+Green = %11000000
+Yellow = %11010000
+Orange = %11100000
+LOrange = %11110000
+
+B0 = %0000
+B1 = %0010
+B2 = %0100
+B3 = %0110
+B4 = %1000
+B5 = %1010
+B6 = %1100
+B7 = %1110
+
+Copy2C = 1
+Copy2M = 2
+Copy3C = 3
+Copy2W = 4
+CopyDW = 5
+Copy3W = 6
+CopyQW = 7
+Reflect = 8
+
+SpriteData
+    .byte %11111011     ;Mountain
+    .byte Brown+B6
+    .byte %10111111
+    .byte %11101111
+    .byte Brown+B5
+    .byte %11111111
+    .byte %11111110
+    .byte Brown+B4
+    .byte %01111110
+    .byte %01111100
+    .byte Brown+B3
+    .byte %00111100
+    .byte %00111100
+    .byte Grey+B6
+    .byte %00011000
+
+    .byte 0
+
+    .byte %00011000     ;Tree
+    .byte LOrange+B2
+    .byte %00011000
+    .byte %00111100
+    .byte LOrange+B2
+    .byte %01111110
+    .byte %11111111
+    .byte Green+B5
+    .byte %11111111
+    .byte %11111111
+    .byte Green+B6
+    .byte %01111111
+    .byte %01111110
+    .byte Green+B5
+    .byte %00111100
+
+    .byte 0
+
+    .byte %00100100
+    .byte Blue+B4
+    .byte %00100100
+    .byte %10111101
+    .byte Blue+B5
+    .byte %10111101
+    .byte %11111111
+    .byte Blue+B6
+    .byte %01111110
+    .byte %00011000
+    .byte LBlue+B7
+    .byte %00111100
+    .byte %00111100
+    .byte LBlue+B7
+    .byte %00011000
+
+                  
+
+
+
+
+
+    org $1F00
+;==========================================================================
+;Tables
+
+;Horz positioning - converts 0-19 into FC-X
+
+HorzTable
+    .byte $00,$71,$F1,$62,$E2,$53,$D3,$44,$C4,$35
+    .byte $B5,$26,$A6,$17,$97,$08,$79,$F9,$6A,$DA
+
+PlayerData      ;From bottom, same format as SpriteData
+    .byte %01111110
+    .byte Grey+B3
+    .byte %11000011
+    .byte %10011001
+    .byte Grey+B3
+    .byte %10100101
+    .byte %10000001
+    .byte Grey+B5
+    .byte %10100101
+    .byte %10000001
+    .byte Grey+B3
+    .byte %10000001
+    .byte %11000011
+    .byte Grey+B3
+    .byte %01111110
+
+;Starting positions for PC
+    org $1FFC
+    .word Start
+    .word Start

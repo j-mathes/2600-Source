@@ -1,0 +1,57 @@
+Maze003.txt
+March 11, 1999
+Andrew Schwerin
+
+    Maze is my first Atari 2600 demo (Yay!).  It is a graphics engine that
+can be used to display a scrolling image of a maze.  The drawing uses
+the playfield registers in reflect mode.  The maze can be scrolled in any
+direction (horizontal, vertical, or both).
+
+    This is release v003 of Maze, which means that it's the first 
+release that works somewhat, although it still needs improvement.
+This release is public domain, but please give credit if you use
+my program code in one of your own projects.
+Release v003 consists of the following files:
+
+maze003.txt - this document, overview of this maze release
+maze003.asm - commented DASM assembly listing
+maze003.bin - 4K binary cart image
+maze003.dis - comment-free distella disassembly
+maze003.snd - SND file for use of Mac/SC owners.
+
+These files are available at:
+http://www.tiac.net/users/schwerin/maze003/
+
+(please contact me, schwerin@tiac.net, if you can't access the files)
+
+Features:
+    The maze map is one page long (256 bytes) and represents a grid of
+      32x32 segments (maze walls).
+    Scrolling is controlled by player0 joystick.  Pressing the button
+      makes it scroll faster.
+    The horizontal resolution is 32 blocks (using playfield graphics)
+    The vertical resolution is 192 (scrolling is precise to 1 scanline),
+      however, most scanline data is repeated over 8 or 56 lines.
+    Drawing kernal has free time.  The possibility exists for sprite
+      support in the future.
+    Tested on PC Atari and Supercharger.
+    NTSC (no PAL yet)
+      
+Known Issues:
+    There is a drawing defect for the top line of the graphics.  This may
+      be due to taking too much time in the precompute and missing the
+      deadline to start drawing.
+    The vertical lines sometimes disappear when scrolling.  I'm not sure
+      why.  Could be an error in my lookup tables.
+    Vertical lines in the middle of the screen are sometimes double
+      width.  This has to do with the timing of the playfield register
+      write.  I can try tweaking this timing for next release.
+    The maze isn't "pure white"; it's light blue.  Hmmm.  What is a good
+      value to get white?
+    This thing would look better if the corners between maze walls
+      were filled in.  Yes.
+    This thing would look better with a real maze and not the current
+      diagnostic.  Yes.
+    This thing would be cool with at least one player sprite.  I want to
+      fix the drawing before I try that.
+    (no PAL yet)

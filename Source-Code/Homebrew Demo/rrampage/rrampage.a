@@ -1,0 +1,1226 @@
+    include vcs2600.h
+    include macro.h
+
+;TERMINOLOGY: "bullets" are what the player shoots
+;"shots" are what the enemies shoot
+;"missiles" refers to the TIA objects
+;"player" tries to refer to the player's ship
+
+;The superchip just maps in 128 bytes of extra RAM in the first 256
+;bytes of the ROM space. $1000-$107F are the write ports and $1080-$10FF
+;are the read ports.
+
+;RAM locations
+
+TopP1X = $80        ;Player 1 and Missile 1 objects are the player's bullets
+TopM1X = $81        ;This is the X-coordinate of the highest one on the screen
+KernelIndex = $82   ;This counts up from 0 to 39 to indicate the kernel increment that we're in.
+                    ;When it matches the next record in EnemyYData, position and start a new enemy.
+                    ;It's also an index into the shot table.
+                    ;It's also an index into the P1/M1 bullet table.
+
+PlayerX = $83
+
+BulletP1XVel = $84  ;X-velocity of the P1 stream of bullets.
+BulletM1XVel = $85  ;Ditto for M1.
+
+FrameCounter = $86  ;Counts frames
+BulletTime = $87
+
+LaserX = $88      ;X-position of the ball (laser).  For now, just always the player's X + 3
+
+EnemyIndex = $89    ;The index into EnemyYData and EnemyXData.  Starts at 0, increments each time we start a new enemy
+
+EnemyGfxPtr = $8A   ;16-bit pointer to gfx for current enemy
+
+PlayerY = $8C       ;The player's Y coordinate.  Branch out of the kernel after segment where KernelIndex = PlayerY
+
+PlayerBranchPtr = $8D   ;16-bit pointer used to pick an address for the multi-branch to position the player
+PlayerGfxPtr = $8F  ;16-bit pointer to player ship graphics
+
+ENAM0Cycle = $91    ;This is loaded and stored on line 4, and its complement on line 2
+                    ;Even frames (the default): bit 1 must be 1
+                    ;Odd frames (delay missile by 2 lines): bit 1 must be 0
+
+;These two data arrays each use every OTHER byte.  BulletHMData is at $90, $92, $94, etc
+BulletHMData = $A0     ;20 bytes for P1/M1 HMOVEs.  P1 in top 4 bits, M1 in lower 4
+BulletNUData = $A1     ;20 bytes for P1/M1 NUSIZes.  Here's the format:
+;bit    7     6     5     4     3     2     1     0
+;    GRP1  GRP1   MissileSize  ENAM1  NumberOfCopies 
+;REMOVED: Bit 3 for ENAM1 is actually reversed because we use the PHP trick.  (0 = on, 1 = off)
+
+ShotXData_W = $1000    ;40 bytes for X positions for all the shots.  Yes, this is a lot, but I want LOTS of objects onscreen. :)
+ShotXData_R = ShotXData_W + $80
+
+EnemyYData = $E0     ;Up to 10 enemies.  These are their Y positions (in increments of 2, from 0 to 79.)
+EnemyXData = $EA     ;X positions for up to 10 enemies.
+
+
+Rand1 = $F4         ;Numbers for rand# generator
+Rand2 = $F5
+Rand3 = $F6
+Rand4 = $F7
+
+Temp1 = $F8
+Temp2 = $F9
+Temp3 = $8F         ;DO NOT USE THESE WITHIN KERNEL, they share with PlayerGfxPtr
+Temp4 = $90
+
+;=================================================================================IT BEGINS
+    org $1000
+    ;Space reserved for Superchip RAM  
+    repeat 256
+    .byte $FF
+    repend
+
+    org $1100
+Start               ;Powerup starts here
+    sta $1ff8       ;Make sure we're in the first bank       
+    jmp ZeroEverything    
+
+SwitchToSecondBank
+    sta $1ff9
+    .byte $FF,$FF,$FF  ;padding opposite JSR DrawScreen in second bank
+    .byte $FF,$FF,$FF  ;padding opposite STA $1FF8 in second bank
+    rts                ;return to sender
+
+;------------------------------------------------------------------------------Initialize hardware
+ZeroEverything
+    SEI  ; Disable interrupts, if there are any.
+    CLD  ; Clear BCD math bit.
+    LDX #$FF
+    TXS  ; Set stack to top of RAM.
+    LDA #0  ;Zero everything.
+B1  STA 0,X
+    STA $1000,X  ;Including Superchip RAM.
+    DEX
+    BNE B1
+    STX SWACNT  ;set data direction registers to input
+    STX SWBCNT
+
+GameInit
+    LDX $0
+InitLoop
+    LDA $FF00,X
+    STA $80,X
+    INX
+    CPX #$78
+    BNE InitLoop
+
+MainLoop
+    JSR  VerticalBlank ;Execute the vertical blank.
+    JSR  GameCalc      ;Do calculations during Vblank
+    JSR  SwitchToSecondBank;Draw the screen
+    JSR  OverScan      ;Do more calculations during overscan
+    JMP  MainLoop      ;Continue forever.
+
+;======================================================================VSYNC
+VerticalBlank          ;Beginning of the frame - at the end of overscan.
+    LDA  #2            ;VBLANK was set at the beginning of overscan.
+    STA  WSYNC
+    STA  VSYNC ;Begin vertical sync.
+    STA  WSYNC ;First line of VSYNC
+    STA  WSYNC ;Second line of VSYNC.
+    LDA #45    ;Set timer to activate during the last line of VBLANK.
+    STA TIM64T
+    LDA #0
+    STA  WSYNC ; Third line of VSYNC.
+    STA  VSYNC ; Writing zero to VSYNC ends vertical sync period.
+    RTS
+
+
+;===================================================================GameCalc
+GameCalc
+    inc FrameCounter
+
+    lda FrameCounter
+    and #%00000000
+    beq L00
+    rts
+L00
+
+    ;---------------------------------------------------------Calculate TopM1X and TopP1X
+    ;Figure out how far to move TopP1X and TopM1X
+    ;"Bullet A" means bullet highest-up on the screen
+    ;We'll do TopM1X first
+
+    lda BulletHMData    ;Bullet A's HMOVE.  (In test, $3D)
+    bit Bit3
+    beq PositiveMoveM1  ;if the HMOVE value is positive, jump.  if it's negative:
+    ora #%11110000      ;set the top four bits - the lower nibble is now a signed number between -1 and -8
+    jmp NegativeMoveM1
+PositiveMoveM1    
+    and #%00000111      ;if the nibble was positive, clear the top 5 bits, now it's a signed number between 0 and 7
+NegativeMoveM1
+    sta Temp1           ;Temp1 has M1 Bullet A's HMOVE value, positive meaning to the left.
+    lda TopM1X
+    sec                 ;Add it to TopM1X (the next op is SBC because positive means to the right for the purpose of positioning.)
+    sbc Temp1           ;A now has the horz position that M1 Bullet B had LAST FRAME.
+    
+    clc                 ;Now add the X-velocity of the M1 bullet stream
+    adc BulletM1XVel    
+
+    sta TopM1X
+
+    ;Now do it for P1 as well    
+
+    lda BulletHMData    ;Bullet A's HMOVE.  (In test, $1F now)
+    lsr
+    lsr
+    lsr
+    lsr
+    bit Bit3
+    beq PositiveMoveP1  ;if the HMOVE value is positive, jump.  if it's negative:
+    ora #%11110000      ;set the top four bits - the lower nibble is now a signed number between -1 and -8
+PositiveMoveP1
+    sta Temp1           ;Temp1 has P1 Bullet A's HMOVE value, positive meaning to the left.
+
+    lda TopP1X
+    sec                 ;Add it to TopP1X (the op is SBC because positive means to the right for this purpose.)
+    sbc Temp1           ;A now has the horz position that P1 Bullet B had LAST FRAME.
+                        
+    clc                 ;Now add the X-velocity of the P1 bullet stream
+    adc BulletP1XVel    
+
+    sta TopP1X
+
+    ;--------------------------------------------------------Cycle Bullets
+    ;Copy each bullet to one place earlier in the array
+    
+    ldx #0
+CycleBullets
+    lda BulletHMData+2,X
+    sta BulletHMData,X
+    lda BulletNUData+2,X
+    sta BulletNUData,X
+    inx
+    inx
+    cpx #38
+    bne CycleBullets    ;22 * 20 = 440 cycles, about 6 scanlines worth
+
+    ;-------------------------------------------------------move Player 0 horizontally
+    ldy #0
+    lda SWCHA       ;Joystick 0
+    bmi J0          ;if bit 7 set, "right" not pressed
+    lda PlayerX     ;
+    cmp #136        ;if pos=136 he's all the way on the right
+    beq J2          ;
+    ldy #2
+
+    ;lda #1
+    ;sta BulletP1XVel
+    ;lda #-1
+    ;sta BulletM1XVel
+
+    jmp J2          ;get out
+    
+J0  and #$40        ;checking bit 6 for "left"
+    bne J1          ;if bit 6 set, "left" not pressed
+    lda PlayerX     ;
+    cmp #16          ;is he all the way on the left?
+    beq J2
+    ldy #$FE        ;
+
+    ;lda #1 
+    ;sta BulletP1XVel
+    ;lda #-1
+    ;sta BulletM1XVel
+
+    jmp J2
+
+J1  ;lda #-1         ;not moving either direction
+    ;sta BulletP1XVel
+    ;lda #1 
+    ;sta BulletM1XVel
+
+J2  ;now Y has the number to add or subtract from PlayerX
+    sty Temp1
+    lda PlayerX
+    clc
+    adc Temp1
+    sta PlayerX
+    adc #3
+    sta LaserX
+   
+    ;-------------------------------------------------------------move Player 0 vertically
+
+    lda #0
+    sta Temp2
+
+    lda SWCHA
+    bit Bit5
+    bne NotDown
+
+    lda PlayerY
+    cmp #39
+    beq DoneVert          ;cap player Y at 39
+
+    ;player moved down.  if PlayerY became an odd number (bit 0 set), he skipped to a new row.  at his OLD position,
+    ;init a blank bullet with HMOVE of 0
+
+    sec
+    sbc #1
+    lsr                 ;LSR it, and it's which bullet number we want to init now
+    asl                 ;multiply it back by two because BulletHMData table uses every other byte (interleaved with BulletNUData)
+    tax
+    lda #0
+    sta BulletHMData,X
+    lda #%00000000
+    sta BulletNUData,X
+
+    inc PlayerY
+    
+    lda #1
+    sta Temp2    
+    jmp DoneVert
+
+NotDown
+    bit Bit4
+    bne DoneVert
+
+    lda PlayerY
+    cmp #1
+    beq DoneVert
+
+    ;player moved up.  if PlayerY became an even number (bit 0 clear), he skipped to a new row, so flag it for special handling
+    
+    dec PlayerY
+    lda PlayerY
+    bit Bit0
+    bne DoneVert
+
+    lda #-1
+    sta Temp2
+
+DoneVert
+
+    ;----------------------------------------------------------Init new bullet
+    ;now, we need to set up a new bullet which is the bullet closest to the player.
+    ;if player just moved sideways, this HMOVE needs be changed by how far the player moved
+    
+    lda PlayerY
+    sec
+    sbc #1
+    lsr                 ;LSR it, and it's which bullet number we want to init now
+    asl                 ;multiply it back by two because BulletHMData table uses every other byte (interleaved with BulletNUData)
+    sta Temp3
+   
+    lda BulletM1XVel    ;BulletM1XVel is already in HMOVE format
+    sec                 ;now add to the already calculated value, how far we moved.
+    sbc Temp1           ;(conceptually, it's an add; the opcode is subtract because for HMOVE, positive is to the left)
+
+    bit Temp2      
+    bpl DoneAdjustV1
+    sta Temp4           ;if player moved up into a new row, this is a special case.  we must ADD this HMOVE value to what was already there.
+    ldx Temp3           ;to what was already there.
+    lda BulletHMData,X  ;get the value that was already there
+    and #$0F
+    clc
+    adc Temp4           ;yes, all 4 temp vars are actually in use
+DoneAdjustV1
+    and #$0F            ;low nibble only
+    ldx Temp3
+    sta Temp4
+
+    ;now do the nibble for P1 as well
+
+    lda BulletP1XVel    ;BulletP1XVel is already in HMOVE format
+    sec                 ;now add to the already calculated value, how far we moved.
+    sbc Temp1           ;(conceptually, it's an add; the opcode is subtract because for HMOVE, positive is to the left)
+    asl
+    asl
+    asl
+    asl                 ;shift it over to the high nibble
+
+    bit Temp2      
+    bpl DoneAdjustV2
+    sta Temp1           ;if player moved up into a new row, this is a special case.  we must ADD this HMOVE value to what was already there.
+    ldx Temp3           ;
+    lda BulletHMData,X  ;get the value that was already there
+    and #$F0            ;we want only the top nibble
+    clc
+    adc Temp1
+DoneAdjustV2
+    ora Temp4           ;put 'em together
+    ldx Temp3           
+    sta BulletHMData,X  ;and store it
+
+    ;turn off GRP1 and ENAM1 unless the player is actually shooting on this frame
+
+    ldx #%00000000      ;no bullet (REMOVED: bit 3 is on because it's reversed for ENAM1 because we use PHP trick)
+    lda INPT4           ;read trigger 0
+    bmi EndBullet       ;no bullet if player isn't shooting
+
+    dec BulletTime
+    lda BulletTime
+    
+    cmp #4
+    bpl EndBullet       ;if clock is >= N, do no bullet
+  
+    ldx #%10001011      ;init a P1 + M1 bullet (%10001011)
+    
+    cmp #0
+    bne EndBullet
+
+    lda #9              ;reset bullet time clock - shoot every X frames
+    sta BulletTime
+    
+EndBullet
+    ldy Temp3
+    stx BulletNUData,Y
+
+NoNewBullet
+    ;------------------------------------------------------------Move Enemies
+    
+    lda EnemyXData
+    clc
+    adc #1
+    cmp #140
+    bne NoMoveP0
+    lda #25
+NoMoveP0
+    sta EnemyXData
+
+    ;Only cycle shots every other frame
+    lda FrameCounter
+    and #%00000001
+    beq L$
+    rts
+L$
+
+    lda EnemyXData+1
+    sec
+    sbc #1
+    cmp #25
+    bne NoMoveP00
+    lda #140
+NoMoveP00
+    sta EnemyXData+1
+
+    ;--------------------------------------------------------Cycle Shots
+    ;Move each enemy shot to one slot lower on the screen.
+    
+    ldx #38
+CycleShots
+    lda ShotXData_R,X
+    sta ShotXData_W+1,X
+    dex
+    bpl CycleShots    ;12 * 40 = 480 cycles, about 7 scanlines worth
+    
+    ;----------------------------------------------------Init new shot
+
+    lda #0
+    sta ShotXData_W
+
+    jsr RandomByte       ;pick a random enemy to fire from
+    and #%00000011
+
+    tax
+    lda EnemyYData,X     ;A has Y location of this enemy (0 to 39)
+    clc
+    adc #2               ;fire from bottom of enemy, not top
+    tay
+    lda ShotXData_R,Y      ;get the current X-coord of this shot slot
+    cmp #0
+    bne AlreadyThere
+    lda EnemyXData,X
+    clc
+    sta Temp1
+    jsr RandomByte
+    and #%00000011
+    clc
+    adc Temp1
+    sta ShotXData_W,Y
+    
+AlreadyThere    
+    RTS
+
+;===================================================================OVERSCAN
+
+OverScan
+    LDA #2
+    STA VBLANK
+    LDA #35        ;Set timer to activate during the last line of overscan.
+    STA TIM64T
+    ;do other calculations here
+EndOverscan
+    LDA INTIM
+    BNE EndOverscan
+    STA WSYNC
+    RTS
+
+;=========================================================================
+;Misc routines (random number generator)
+;=========================================================================
+
+RandomBit
+    lda Rand4
+    asl
+    asl
+    asl
+    eor Rand4
+    asl
+    asl
+    rol Rand1
+    rol Rand2
+    rol Rand3
+    rol Rand4
+    rts
+
+RandomByte
+    ldx #8
+RandomByte1
+    jsr RandomBit
+    dex
+    bne RandomByte1
+    lda Rand1
+    rts
+
+
+    org $1F00      ;$78 bytes to init RAM from $80
+RAMTable
+    ;bytes 0, 1, 3 are important, and the 38
+    .byte 57, 58, 0, 70,-1,1,0,2,0,0,0,0,38,0,0,0
+    ;HMOVEs for P1/M1 (P1 high nibble, M1 low nibble) and NUSIZes
+    repeat 20
+    .byte %00000000, %00001000
+    repend
+    ;Shot X
+    repeat 40
+    .byte $00
+    repend
+    .byte 0,4,7,13,24,28,31,34,37,0      ;enemy Y positions
+    .byte 80,90,50,120,30,53,44,122,70,25  ;enemy X positions
+
+    
+    org $1F74
+    .byte $6d, $6d, $6d, $6d  ;random number seed init
+
+    ORG $1FF0
+
+BitTable
+Bit0 .byte #%00000001
+Bit1 .byte #%00000010
+Bit2 .byte #%00000100
+Bit3 .byte #%00001000
+Bit4 .byte #%00010000
+Bit5 .byte #%00100000
+Bit6 .byte #%01000000
+Bit7 .byte #%10000000
+
+;Starting positions for PC
+    org $1FFC
+    .word Start
+    .word Start
+
+;END OF FIRST BANK
+
+;==========================================SECOND BANK===========================================
+
+    ;Space reserved for Superchip RAM  
+    ORG $2000
+    RORG $3000
+    repeat 256
+    .byte $FF
+    repend
+    
+    ORG $2100
+    sta $1FF8         ;get into first bank at powerup
+    .byte $FF,$FF,$FF ;padding opposite Jmp ZeroEverything in the first bank
+;------------------------------------------------------------------------------------------------
+
+    .byte $FF,$FF,$FF ;padding opposite STA $1FF9 in the first bank
+    jsr DrawScreen
+    sta $1FF8         ;switch back to first bank
+    rts
+    
+;=================================================================DrawScreen
+DrawScreen
+    ;while still offscreen, position the P1 and M1 and ball (laser) objects at their starting point
+    lda TopP1X          ;+3
+    cmp #159
+    bcc MustAdjustP1    ;check to see if TopP1X is too high.  if so, it needs adjusting so that it's negative from 160 instead of 255.
+    sbc #96             ;we know the carry is set    
+MustAdjustP1    
+    STA WSYNC
+    tay                 ;+2  2
+    sta HMCLR           ;+3  5
+    lda HorzTable,Y     ;+4  9
+    sta HMP1            ;+3 12 
+    and #$0F            ;+2 14
+    tax                 ;+2 16
+P1  dex                 ;+2 18
+    bpl P1              ;when branch not taken: +2 (20 + x*5)
+                        CHECKPAGE P1
+    sta RESP1           ;(23 + x*5) NOW!
+
+    lda TopM1X          ;+3
+    cmp #159
+    bcc MustAdjustP2    ;check to see if TopM1X is too high.  if so, it needs adjusting so that it's negative from 160 instead of 255.
+    sbc #96             ;we know the carry is set    
+MustAdjustP2
+    sta WSYNC
+    tay                 ;+2  2    
+    SLEEP 3             ;+3  5
+    lda HorzTable+1,Y   ;+4  9
+    sta HMM1            ;+3 12 
+    and #$0F            ;+2 14
+    tax                 ;+2 16
+M1  dex                 ;+2 18
+    bpl M1              ;when branch not taken: +2 (20 + x*5)
+                        CHECKPAGE M1
+    sta RESM1           ;(23 + x*5) NOW!
+    
+    sta WSYNC
+    ldy LaserX          ;+3  3
+    nop                 ;+2  5
+    lda HorzTable+1,Y   ;+4  9
+    sta HMBL            ;+3 12
+    and #$0F            ;+2 14
+    tax                 ;+2 16
+B0  dex                 ;+2 18
+    bpl B0              ;when branch not taken: +2 (20 + x*5)
+                        CHECKPAGE B0
+    sta RESBL           ;(23 + x*5) NOW!
+    
+    sta WSYNC
+    sta HMOVE
+
+    ldx #0
+    lda FrameCounter    ;also decide now whether to enable the ball
+    bit Bit5
+    bne NoBall
+    
+    bit INPT4
+    bpl YesBall
+    lda #0    
+YesBall
+    lsr
+    lsr
+    lsr
+    tax
+NoBall
+    stx ENABL
+    
+    lda FrameCounter    ;decide whether to display M0 normally or delayed by 2 frames
+    asl
+    eor #%00000010
+    sta ENAM0Cycle    
+
+    ldx PlayerX         ;set up the 16-bit indirect jump pointer to position the player
+    lda HorzTable,X
+    and #%00001111      ;just want the coarse position
+    asl                 ;make it an index into PlayerJumpTable
+    tax
+    lda PlayerJumpTable,X
+    sta PlayerBranchPtr
+    lda PlayerJumpTable+1,X
+    sta PlayerBranchPtr+1
+
+    lda #<PlayerGfxTop
+    sta PlayerGfxPtr
+    lda #>PlayerGfxTop  ;must be one less than a multiple of 4
+    sta PlayerGfxPtr+1
+
+    lda #$4A            ;pretty colors!
+    sta COLUP1
+
+    lda #$0F
+    sta COLUP0
+
+    lda #$70
+    sta COLUBK
+    lda #$CA
+    sta COLUPF
+    lda #$FF
+    sta PF0
+    lda #%00010101
+    sta CTRLPF
+    
+    lda #%00010000
+    sta NUSIZ0
+
+    lda #0
+    sta GRP0
+    sta GRP1
+    sta ENAM1
+    sta KernelIndex
+    sta EnemyIndex
+    
+T0$ lda INTIM
+    bne T0$
+    sta WSYNC      ;there is one extra line at the start before we display anything, because KernelLoop needs time before its first WSYNC
+    sta VBLANK     ;here we go!
+
+    sta HMCLR      ;       also get this in before the WSYNC
+    
+    ldx #0         ;X will be KernelIndex
+
+    jmp KernelLoop
+    
+    org $2400      ;futz with this to avoid delay-loop-over-page-boundary problems
+    rorg $3400
+   
+;===================================================================KERNEL LOOP
+ 
+KernelLoop    
+    txa                 ;+2  62  X has KernelIndex, copy into A because CPX can't do absolute,Y
+    ldy EnemyIndex      ;+3  65
+    cmp EnemyYData,Y    ;+4  69
+    sec                 ;+2  71  conveniently enough, both paths from the upcoming branch need the carry set
+    beq PositionP0_A    ;+2  73  if we branch, it is time to position P0
+
+    sta WSYNC           ;begin scanline 1 of 4: when not positioning P0
+
+    lda EnemyGfxPtr     ;+3   3  subtract 4 from the enemy gfx pointer to get it ready for this half of the kernel loop.
+    sbc #4              ;+2   5  carry was set
+    bpl PtrOK_A         ;+2   7
+    ldy #>EmptyPage     ;+2   9  this is crazy - but if we don't want to draw the enemy, we point the pointer at a completely empty page.
+    sty EnemyGfxPtr+1   ;+3  12
+PtrOK_A
+    sta EnemyGfxPtr     ;+3  15
+
+    ldy #3              ;+2  17  do GRP0 lookup/store
+    lda (EnemyGfxPtr),Y ;+5  22
+    sta GRP0            ;+3  25
+
+    ldy #2              ;+2  27
+    lda (EnemyGfxPtr),Y ;+5  32  preload GRP0 for next scanline
+    sta WSYNC           ;        begin scanline 2 of 4 when we are NOT positioning player
+    sta HMOVE           ;+3   3  complete positioning of bullets, when P0 isn't getting positioned
+    sta GRP0            ;+3   6
+    jmp ContinueP0_A    ;+3   9
+
+PositionP0_A
+    STA WSYNC           ;begin scanline 1 of 4: when positioning P0
+    lda EnemyXData,Y    ;+4  4  get the X coordinate
+    tay                 ;+2  6
+    lda HorzTable,Y     ;+4 10  get the FC_X value
+    sta.w HMP0          ;+4 14 
+    and #$0F            ;+2 16
+P0A sbc #1              ;+2 18
+    bpl P0A             ;when branch not taken: +2 (20 + x*5)
+                        CHECKPAGE P0A
+    sta RESP0           ;(23 + x*5) NOW!
+    sta WSYNC           ;alternate way to begin scanline 2 of 8 when we ARE positioning player
+    sta HMOVE           ;+3  3  complete position of P0 and bullets
+    inc EnemyIndex      ;+5  8
+    
+    lda #<CopterGfxTop  ;+2 10  now set up P0's graphics pointer.  low byte must be a multiple of 4
+    sta EnemyGfxPtr     ;+3 13
+    lda #>CopterGfxTop  ;+2 15
+    sta EnemyGfxPtr+1   ;+3 18
+    
+ContinueP0_A            ;always get here during scanline 2 of 4
+    
+    txa                 ;+2 20
+    and #1              ;+2 22
+    beq NoTurnOnNow     ;+2 24 If lowest bit of KernelIndex is 1, it's time to turn on bullets now
+
+    lda BulletNUData-1,X;+4 26 the -1 figure in this lookup is because KernelIndex was already incremented
+    sta NUSIZ1          ;+3 29
+    lsr                 ;+2 31
+    lsr                 ;+2 33
+    sta ENAM1           ;+3 36 turn on or off ENAM1
+    lda BulletNUData-1,X;+4 40
+    and #%11000000      ;+2 42 
+    sta GRP1            ;+3 45 
+    
+NoTurnOnNow
+    ldy #1              ;+2 47
+    lda (EnemyGfxPtr),Y ;+5 52 preload A with the GRP0 for the next line
+
+    sty ENAM0           ;+3 55 turn off M0 before we position it
+    
+    ldy ShotXData_R,X   ;+4 59 X always has KernelIndex
+    sta HMCLR           ;+3 62
+    
+    
+    sta WSYNC           ;begin scanline 3 of 4: position M0
+    sta GRP0            ;+3  3    store the preloaded GRP0 data
+    lda HorzTable+1,Y   ;+4  7
+    sta HMM0            ;+3 10
+    and #$0F            ;+2 12
+    sec                 ;+2 14
+    ldy #0              ;+2 16   for later
+M0A sbc #1              ;+2 18
+    bpl M0A             ;when branch not taken: +2 (20 + x*5)
+                        CHECKPAGE M0A
+    sta RESM0           ;(23 + x*5) NOW!
+    sta WSYNC           ;begin scanline 4 of 4
+    sta HMOVE           ;+3  3 complete position of M0
+    sta ENAM0           ;+3  6 sneaky!  A is FF so this turns on ENAM0!
+
+    cpx PlayerY         ;+3  9  X still has KernelIndex
+    bne NotEndKernel    ;+2,3 11,12
+    jmp (PlayerBranchPtr) ;+5 16
+NotEndKernel
+    lda (EnemyGfxPtr),Y ;+5 19 now do GRP0 lookup/store; Y was set to 0 earlier
+    sta GRP0            ;+3 22
+
+    txa                 ;+2 24 X still had KernelIndex
+    and #1              ;+2 26
+    sta HMCLR           ;+3 29 must always happen whether or not it's time for bullets
+    bne NoBulletsNow    ;+2 31 If lowest bit of KernelIndex is 0, it is time to do bullets now
+    
+
+                        ;========================================done with first half of kernel loop
+    lda BulletHMData,X  ;+4 41
+    sta HMP1            ;+3 44
+    asl                 ;+2 46
+    asl                 ;+2 48
+    asl                 ;+2 50
+    asl                 ;+2 52
+    sta HMM1            ;+3 55
+
+NoBulletsNow
+    inx                 ;+2 57 increment KernelIndex
+    jmp KernelLoop      ;+3 60
+    
+;===================================================================END MAIN KERNEL
+;===================================================================Now Position Player
+;At this point KernelIndex = PlayerY, and it has not yet been incremented for the next P0=EnemyYData / M0=KernelIndex
+;16 cycles used.  GRP0 lookup/store has not been done yet.  Bullets also need to be turned off.
+
+    MAC STANDARDGRP
+    ldy #0              ;+2 18
+    lda (EnemyGfxPtr),Y ;+5 23
+    sta GRP0            ;+3 26
+    sty NUSIZ1          ;+3 29
+    sty GRP1            ;+3 32
+    ENDM
+    
+    MAC STANDARDHM
+    sta HMCLR           ;+3 39
+    ldy PlayerX         ;+3 32
+    lda HorzTable,Y     ;+4 36
+    sta HMP1            ;+3 42
+    ENDM
+
+    MAC STANDARDLOADP0
+    lda KernelIndex     ;+3 59
+    ldy EnemyIndex      ;+3 62 
+    ldx EnemyXData,Y    ;+4 66 get the X coordinate - this is not needed if we don't position P0 this time, but we don't have time to load it later
+    cmp EnemyYData,Y    ;+4 70
+    ENDM
+
+PlayerJump0  ;RESP1 must end on cycle 23
+
+    ldy #0              ;+2 18
+    inx                 ;+2 20
+    sta RESP1           ;+3 23  cycle 23!
+    lda (EnemyGfxPtr),Y ;+5 28
+    sta GRP0            ;+3 31
+
+    sty NUSIZ1          ;+3 34
+    sty GRP1            ;+3 37 turn off GRP1 to avoid artifacts
+
+    stx KernelIndex     ;+3 40
+
+    STANDARDHM          ;+13 53
+    
+    STANDARDLOADP0      ;+14 67
+    
+    jmp EndKernel       ;+3 70  either I miscounted or you really can end WSYNC as late as 76 and it still works?
+
+
+PlayerJump1  ;RESP1 must end on cycle 28
+
+    ldy #0              ;+2 18
+    lda (EnemyGfxPtr),Y ;+5 23
+    inx                 ;+2 25
+    sta RESP1           ;+3 28  cycle 28!
+    sta GRP0            ;+3 31
+    sty NUSIZ1          ;+3 34
+    sty GRP1            ;+3 37 
+    
+    STANDARDHM          ;+13 50
+    
+    stx KernelIndex     ;+3 53
+
+    STANDARDLOADP0      ;+14 67
+    
+    jmp EndKernel
+
+
+PlayerJump2  ;RESP1 must end on cycle 33
+
+    ldy #0              ;+2 18
+    lda (EnemyGfxPtr),Y ;+5 23
+    sta GRP0            ;+3 26
+    sty NUSIZ1          ;+3 29
+    sta.w RESP1         ;+4 33  cycle 33!
+    sty GRP1            ;+3 36
+    
+    STANDARDHM          ;+13 49
+
+    inx                 ;+2 51          
+    stx KernelIndex     ;+3 54
+
+    STANDARDLOADP0      ;+14 68
+
+    jmp EndKernel
+
+PlayerJump3  ;RESP1 must end on cycle 38
+
+    STANDARDGRP         ;+16 32
+    
+    sta HMCLR           ;+3 35
+    sta RESP1           ;+3 38  cycle 38!
+    ldy PlayerX         ;+3 41
+    lda HorzTable,Y     ;+4 45
+    sta HMP1            ;+3 48
+
+    inx                 ;+2 50
+    stx KernelIndex     ;+3 53
+
+    STANDARDLOADP0      ;+14 67
+
+    jmp EndKernel       ;+3 70
+
+PlayerJump4  ;RESP1 must end on cycle 43
+
+    STANDARDGRP         ;+16 32
+
+    inx                 ;+2 34
+
+    sta HMCLR           ;+3 37
+    ldy PlayerX         ;+3 40
+    sta RESP1           ;+3 43  cycle 43!
+    lda HorzTable,Y     ;+4 47
+    sta HMP1            ;+3 50
+
+    stx KernelIndex     ;+3 53
+
+    STANDARDLOADP0      ;+14 67
+
+    jmp EndKernel       ;+3 70
+
+PlayerJump5  ;RESP1 must end on cycle 48
+
+    STANDARDGRP         ;+16 32
+
+    STANDARDHM          ;+13 45
+    
+    sta RESP1           ;+3 48  cycle 48!
+    
+    inx                 ;+2 50
+    stx KernelIndex     ;+3 53
+
+    STANDARDLOADP0      ;+14 67
+    
+    jmp EndKernel       ;+3 70
+
+PlayerJump6  ;RESP1 must end on cycle 53
+
+    STANDARDGRP         ;+16 32
+
+    STANDARDHM          ;+13 45
+
+    inx                 ;+2 47
+    stx KernelIndex     ;+3 50
+    sta RESP1           ;+3 53  cycle 53!
+
+    STANDARDLOADP0      ;+14 67
+
+    jmp EndKernel       ;+3 70
+
+PlayerJump7  ;RESP1 must end on cycle 58
+
+    STANDARDGRP         ;+16 32
+
+    STANDARDHM          ;+13 45
+
+    inx                 ;+2 47
+    stx KernelIndex     ;+3 50
+
+    lda KernelIndex     ;+3 53
+    nop                 ;+2 55
+    sta RESP1           ;+3 58  cycle 58!
+    ldy EnemyIndex      ;+3 61 
+    ldx EnemyXData,Y    ;+4 65 get the X coordinate - this is not needed if we don't position P0 this time, but we don't have time to load it later
+    cmp EnemyYData,Y    ;+4 69
+
+    jmp EndKernel       ;+3 72
+
+PlayerJump8  ;RESP1 must end on cycle 63
+
+    STANDARDGRP         ;+16 32
+
+    STANDARDHM          ;+13 45
+
+    inx                 ;+2 47
+    stx KernelIndex     ;+3 50
+
+    lda KernelIndex     ;+3 53
+    ldy EnemyIndex      ;+3 56 
+    ldx EnemyXData,Y    ;+4 60 get the X coordinate - this is not needed if we don't position P0 this time, but we don't have time to load it later
+    sta RESP1           ;+3 63  cycle 63!
+    cmp EnemyYData,Y    ;+4 67
+
+    jmp EndKernel       ;+3 70
+
+PlayerJump9  ;RESP1 must end on cycle 68
+
+    STANDARDGRP         ;+16 32
+
+    STANDARDHM          ;+13 45
+
+    inx                 ;+2 47
+    stx KernelIndex     ;+3 50
+
+    STANDARDLOADP0      ;+14 64
+
+    sta.w RESP1         ;+4 68 cycle 68!
+    
+    jmp EndKernel       ;+3 71
+
+PlayerJumpA  ;RESP1 must end on cycle 73
+
+    STANDARDGRP         ;+16 32
+
+    STANDARDHM          ;+13 45
+
+    inx                 ;+2 47
+    stx KernelIndex     ;+3 50
+
+    STANDARDLOADP0      ;+14 64
+    
+    SLEEP 6             ;+6 70
+    
+    sta RESP1           ;cycle 73!
+
+;WOW! that worked!
+;----------------------------------------------------------------------Bottom section of kernel, during and after player's ship
+EndKernel
+
+BottomKernel
+
+    sta WSYNC           ;begin scanline 1 of 4: position P0 if necessary
+    beq PositionP0_C    ;+3  if we branch, positioning P0
+
+    lda EnemyGfxPtr     ;subtract 4 from the enemy gfx pointer to get it ready for this iteration of the loop.
+    sec
+    sbc #4
+    bpl PtrOK_C
+    ldy #>EmptyPage     ;this is crazy - but if we don't want to draw the enemy, we point the pointer at a completely empty page.
+    sty EnemyGfxPtr+1 
+PtrOK_C
+    sta EnemyGfxPtr
+
+    ldy #3              ;do GRP0 lookup/store
+    lda (EnemyGfxPtr),Y
+    sta GRP0
+    lda (PlayerGfxPtr),Y;and GRP1 lookup/store
+    sta GRP1
+
+    lda #0
+    sta ENABL           ;kill the ball (laser) and M1
+    sta ENAM1
+                            
+    sta WSYNC           ;begin scanline 2 of 4 when we are NOT positioning player
+    sta HMOVE           ;complete position of P1 if this is the first time through the loop
+
+    ldy #2              ;+2 
+    lda (EnemyGfxPtr),Y ;+5 
+    sta GRP0            ;+3 
+
+    jmp ContinueP0_C
+
+PositionP0_C
+                        CHECKPAGE BottomKernel
+    lda HorzTable,X     ;+4  7
+    sta HMP0            ;+3 10
+    and #$0F            ;+2 12
+    tay                 ;+2 14
+    nop                 ;+2 16
+P0C dey                 ;+2 18
+    bpl P0C             ;when branch not taken: +2 (20 + x*5)
+                        CHECKPAGE P0C
+    sta RESP0           ;(23 + x*5) NOW!
+    sta WSYNC           ;alternate way to begin scanline 2 of 4 when we ARE positioning player
+    sta HMOVE           ;complete position of P0 (and also P1 if this is the first time through the loop)
+    inc EnemyIndex      ;+5  5   counting cycles to see how many I have, not for timing
+    
+    lda #<CopterGfxTop  ;+2  7   now set up P0's graphics pointer.  low byte must be a multiple of 4
+    sta EnemyGfxPtr     ;+3 10
+    lda #>CopterGfxTop  ;+2 12
+    sta EnemyGfxPtr+1   ;+3 15
+    ldy #2
+   
+ContinueP0_C            ;always get here during scanline 2 of 4
+    lda (PlayerGfxPtr),Y;+5 
+    sta GRP1            ;+3 
+
+    sta HMCLR           ;+3 
+    ldx KernelIndex     ;+3    start grabbing data for the missile, before the WSYNC
+    ldy ShotXData_R,X   ;+4    this is before the graphics preloads because the preloads need the registers
+    lda HorzTable+1,Y   ;+4 
+    sta HMM0            ;+3  
+    and #$0F            ;+2 
+    sta Temp1           ;+3 
+
+    ldy #1              ;+2    start preloading graphics
+    lda (EnemyGfxPtr),Y ;+5    preload for GRP0 for next line
+    tax                 ;+2    save it in X
+    lda (PlayerGfxPtr),Y;+5    preload for GRP1 for next line
+
+    sta WSYNC           ;begin scanline 3 of 4: position M0
+    stx GRP0            ;+3  3    store the preloaded GRP0 data
+    sta GRP1            ;+3  6    store the preloaded GRP1 data
+    ldx Temp1           ;+3  9
+    ldy #0              ;+2 11
+    lda (EnemyGfxPtr),Y ;+5 16 preload for LATER
+M0C dex                 ;+2 18
+    bpl M0C             ;when branch not taken: +2 (20 + x*5)
+                        CHECKPAGE M0C
+    sta RESM0           ;(23 + x*5) NOW!
+
+    sta WSYNC           ;begin scanline 4 of 4: clean up and loop
+    sta HMOVE           ;+3  3 complete M0
+    stx ENAM0           ;+3  6 sneaky!  X is FF, so this will turn ENAM0 on!
+
+    sta GRP0            ;this was preloaded EARLIER
+    lda (PlayerGfxPtr),Y;Y was also already 0
+    sta GRP1
+    
+    lda PlayerGfxPtr
+    bne NoResetPtr
+    ldy #>EmptyPage
+    sty PlayerGfxPtr+1
+NoResetPtr
+    sec
+    sbc #4
+    sta PlayerGfxPtr
+
+    sta HMCLR           ;clear HM after the M0 move, before the next P0 move
+
+    inc KernelIndex
+    lda KernelIndex
+    cmp #42
+    beq StatusArea
+    
+    ldy EnemyIndex      ; 
+    ldx EnemyXData,Y    ; get the X coordinate - this is not needed if we don't position P0 this time, but we don't have time to load it later
+    cmp EnemyYData,Y    ;
+
+    jmp BottomKernel
+
+
+;=================================================================Kernel is over.  Draw the status area.
+
+StatusArea
+    ldx #23
+K0  STA WSYNC           ;draw 23 blank scanlines
+    lda #0
+    sta COLUBK
+    sta GRP0
+    sta GRP1
+    sta ENAM0
+    sta ENAM1
+    sta COLUP0
+    sta COLUP1
+
+    dex
+    bne K0
+   
+    ;ldx #$FB            ;restore stack from PHP trick
+    ;txs
+    RTS
+
+;===========================================================GRAPHICS and other data
+    org $2B00
+    rorg $3b00
+CopterGfx
+    .byte %00000000
+    .byte %00011111
+    .byte %00001010
+    .byte %10001110
+    .byte %11111111
+    .byte %11111111
+    .byte %10011111
+    .byte %00001110
+CopterGfxTop
+    .byte %00000100
+    .byte %00000111
+    .byte %00011100
+    .byte %00000000
+    .byte %00000000
+    .byte %00000000
+
+    org $2C00
+    rorg $3c00
+
+PlayerGfx
+    .byte %01111110
+    .byte %00111100
+    .byte %00011000
+    .byte %00011000
+    .byte %10011001
+    .byte %11111111
+    .byte %01111110
+    .byte %00111100
+PlayerGfxTop
+    .byte %00011000
+    .byte %00011000
+    .byte %00000000
+    .byte %00000000
+    .byte %00000000
+    .byte %00000000
+    .byte %00000000
+    .byte %00000000
+
+PlayerJumpTable
+    .byte <PlayerJump0, >PlayerJump0
+    .byte <PlayerJump1, >PlayerJump1
+    .byte <PlayerJump2, >PlayerJump2   
+    .byte <PlayerJump3, >PlayerJump3   
+    .byte <PlayerJump4, >PlayerJump4   
+    .byte <PlayerJump5, >PlayerJump5   
+    .byte <PlayerJump6, >PlayerJump6   
+    .byte <PlayerJump7, >PlayerJump7   
+    .byte <PlayerJump8, >PlayerJump8   
+    .byte <PlayerJump9, >PlayerJump9   
+    .byte <PlayerJumpA, >PlayerJumpA   
+
+    org $2D00
+    rorg $3d00
+EmptyPage    
+    ;kinda crazy, but this is just a page full of 0's to point EnemyGfxPtr into when we're not drawing an enemy
+    repeat 256
+    .byte 0
+    repend
+
+;------------------------------------------------Horz positioning table
+    org $2E00
+    rorg $3e00
+HorzTable
+    .byte $60,$50,$40,$30,$20,$10,$00,$F0,$E0,$D0,$C0,$B0,$A0,$90
+    .byte $71,$61,$51,$41,$31,$21,$11,$01,$F1,$E1,$D1,$C1,$B1,$A1,$91
+    .byte $72,$62,$52,$42,$32,$22,$12,$02,$F2,$E2,$D2,$C2,$B2,$A2,$92
+    .byte $73,$63,$53,$43,$33,$23,$13,$03,$F3,$E3,$D3,$C3,$B3,$A3,$93
+    .byte $74,$64,$54,$44,$34,$24,$14,$04,$F4,$E4,$D4,$C4,$B4,$A4,$94
+    .byte $75,$65,$55,$45,$35,$25,$15,$05,$F5,$E5,$D5,$C5,$B5,$A5,$95
+    .byte $76,$66,$56,$46,$36,$26,$16,$06,$F6,$E6,$D6,$C6,$B6,$A6,$96
+    .byte $77,$67,$57,$47,$37,$27,$17,$07,$F7,$E7,$D7,$C7,$B7,$A7,$97
+    .byte $78,$68,$58,$48,$38,$28,$18,$08,$F8,$E8,$D8,$C8,$B8,$A8,$98
+    .byte $79,$69,$59,$49,$39,$29,$19,$09,$F9,$E9,$D9,$C9,$B9,$A9,$99
+    .byte $7A,$6A,$5A,$4A,$3A,$2A,$1A,$0A,$FA,$EA,$DA,$CA
+
+
+;BitTable congruent with same data in first bank
+     ORG $2FF0
+     RORG $2FF0
+    .byte #%00000001
+    .byte #%00000010
+    .byte #%00000100
+    .byte #%00001000
+    .byte #%00010000
+    .byte #%00100000
+    .byte #%01000000
+    .byte #%10000000
+
+    ORG $2FFC
+    rorg $3ffc
+    .word Start
+    .word Start

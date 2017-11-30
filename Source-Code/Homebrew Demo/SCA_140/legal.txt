@@ -1,0 +1,8 @@
+STAR CASTLE ARCADE
+(C)2013 Chris Walton, Thomas Jentzsch
+
+Star Castle Arcade for the Atari 2600 was developed by Chris Walton and Thomas 
+Jentzsch.
+
+This code and the corresponding binary game may not be distributed as comercial 
+software or physical ROMs without expressed written consent of the authors. 
