@@ -1,0 +1,41 @@
+##############################################################################
+# Melody FA2 Backswitching - (C) Copyright - Chris Walton 2012
+##############################################################################
+
+# Tool names
+TOOLCHAIN=arm-none-eabi
+CC=$(TOOLCHAIN)-gcc
+AS=$(TOOLCHAIN)-as
+LD=$(TOOLCHAIN)-ld
+OBJCOPY=$(TOOLCHAIN)-objcopy
+SIZE=$(TOOLCHAIN)-size
+
+# Compiler flags
+INCLUDES = -I.
+OPTIMIZATION = -Os 
+CFLAGS = -mcpu=arm7tdmi -march=armv4t
+CFLAGS += -Wall -ffunction-sections
+CFLAGS += $(OPTIMIZATION) $(INCLUDES)
+
+############################# BOOTLOADER CODE #################################
+
+BOOTNAME = bootloader
+BOOTELF = $(BOOTNAME).elf
+BOOTBIN = $(BOOTNAME).bin
+BOOTMAP = $(BOOTNAME).map
+BOOTLINK = bootloader.lds
+BOOTOBJS = bankswitch.o flash.o
+BOOTTARGETS = $(BOOTELF) $(BOOTBIN)
+
+bootloader: $(BOOTTARGETS)
+$(BOOTELF): $(BOOTOBJS) Makefile
+	$(CC) $(CFLAGS) -o $(BOOTELF) $(BOOTOBJS) -T $(BOOTLINK) -nostartfiles -Wl,-Map=$(BOOTMAP),--gc-sections -u _FrequencyTable
+$(BOOTBIN): $(BOOTELF)
+	$(OBJCOPY) -O binary -S $(BOOTELF) $(BOOTBIN)
+	$(SIZE) $(BOOTOBJS) $(BOOTELF)
+
+############################# CLEAN PROJECT ###################################
+
+clean:
+	rm -f *.o *.map $(BOOTTARGETS)
+

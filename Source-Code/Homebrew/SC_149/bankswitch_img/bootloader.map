@@ -1,0 +1,104 @@
+
+Discarded input sections
+
+ .text          0x00000000        0x0 bootstartup.o
+ .data          0x00000000        0x0 bootstartup.o
+ .bss           0x00000000        0x0 bootstartup.o
+ .text          0x00000000        0x0 bankswitch.o
+ .data          0x00000000        0x0 bankswitch.o
+ .bss           0x00000000        0x0 bankswitch.o
+ .text          0x00000000        0x0 flash.o
+ .data          0x00000000        0x0 flash.o
+ .bss           0x00000000        0x0 flash.o
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+boot             0x00000000         0x00000200         xr
+flash            0x00001000         0x00007000         xr
+ramdata          0x40001000         0x00000100
+ram              0x40000000         0x00001000
+ram_iar          0x40001fe0         0x00000020
+*default*        0x00000000         0xffffffff
+
+Linker script and memory map
+
+LOAD bootstartup.o
+LOAD bankswitch.o
+LOAD flash.o
+START GROUP
+LOAD /home/cdw/bin/arm-2010q1/bin/../lib/gcc/arm-none-eabi/4.4.1/libgcc.a
+LOAD /home/cdw/bin/arm-2010q1/bin/../lib/gcc/arm-none-eabi/4.4.1/../../../../arm-none-eabi/lib/libc.a
+END GROUP
+                0x40001fdc                _stack_end = 0x40001fdc
+
+.bootcode       0x00000000      0x184
+                0x00000000                . = 0x0
+                0x00000000                _sboot = .
+ *(.boot)
+ .boot          0x00000000      0x184 bootstartup.o
+                0x00000000                _startup
+                0x00000184                . = ALIGN (0x4)
+                0x00000184                _eboot = .
+
+.reloc0         0x40000000      0x12c load address 0x00001000
+                0x40000000                . = ALIGN (0x4)
+                0x40000000                _sreloc0 = .
+ *(.bankcode)
+ .bankcode      0x40000000      0x10c bankswitch.o
+                0x40000000                _main
+ *(.rodata*)
+ .rodata        0x4000010c       0x20 bankswitch.o
+                0x4000012c                . = ALIGN (0x4)
+                0x4000012c                _ereloc0 = .
+
+.reloc1         0x4000012c      0x1e0 load address 0x00002000
+                0x4000012c                . = ALIGN (0x4)
+                0x4000012c                _sreloc1 = .
+ *(.text*)
+ .text.FLASH_PrepareSector
+                0x4000012c       0x3c flash.o
+ .text.FLASH_EraseSector
+                0x40000168       0x98 flash.o
+                0x40000168                FLASH_EraseSector
+ .text.FLASH_WriteBlock
+                0x40000200       0x6c flash.o
+                0x40000200                FLASH_WriteBlock
+ .text.FLASH_Main
+                0x4000026c       0xa0 flash.o
+                0x4000026c                FLASH_Main
+ *(.data)
+                0x4000030c                . = ALIGN (0x4)
+                0x4000030c                _ereloc1 = .
+
+.glue_7         0x4000030c        0x0 load address 0x000021e0
+ .glue_7        0x00000000        0x0 linker stubs
+
+.glue_7t        0x4000030c        0x0 load address 0x000021e0
+ .glue_7t       0x00000000        0x0 linker stubs
+
+.vfp11_veneer   0x4000030c        0x0 load address 0x000021e0
+ .vfp11_veneer  0x00000000        0x0 linker stubs
+
+.v4_bx          0x4000030c        0x0 load address 0x000021e0
+ .v4_bx         0x00000000        0x0 linker stubs
+
+.bss            0x4000030c        0x0
+                0x4000030c                _szero = .
+ *(.bss)
+                0x4000030c                . = ALIGN (0x4)
+                0x4000030c                _ezero = .
+                0x4000030c                end = .
+OUTPUT(bootloader.elf elf32-littlearm)
+
+.ARM.attributes
+                0x00000000       0x2d
+ .ARM.attributes
+                0x00000000       0x18 bootstartup.o
+ .ARM.attributes
+                0x00000018       0x16 bankswitch.o
+ .ARM.attributes
+                0x0000002e       0x32 flash.o
+
+.comment        0x00000000       0x2b
+ .comment       0x00000000       0x2b flash.o

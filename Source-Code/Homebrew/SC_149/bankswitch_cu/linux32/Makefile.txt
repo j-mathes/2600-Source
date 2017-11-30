@@ -1,0 +1,19 @@
+###############################################################################
+# STAR CASTLE - Game Image Tool - (C) Copyright - Chris Walton 2010
+###############################################################################
+
+CXX = g++
+CXXFLAGS = -O2 -Wall -pedantic-errors
+OBJECTS = makeimg.o
+EXECUTABLE = makeimg_cu
+
+all: $(EXECUTABLE)
+
+$(EXECUTABLE): $(OBJECTS)
+	$(CXX) -o $@ $(OBJECTS)
+
+clean:
+	rm -f $(OBJECTS) $(EXECUTABLE)
+
+.cpp.o:
+	$(CXX) $(CXXFLAGS) -c -o $@ $<

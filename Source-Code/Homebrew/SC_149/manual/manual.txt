@@ -1,0 +1,121 @@
+===============================================================================
+=                             Star Castle Arcade                              =
+=                        A game for the Atari 2600 VCS                        =
+=                      Copyright (C) 2013 - Team Antonym                      =
+===============================================================================
+
+For centuries the feudal Star Lords have controlled the galaxy from their 
+impenetrable Star Castles.   Once they were hailed as protectors of peace, 
+now they serve only to plunder the galaxy of its energy and wealth.   You 
+have assembled a small fleet of ships to destroy the Star Castles and rid the 
+galaxy of their scourge.   How they laughed when they heard of your plans, 
+oh how they laughed!
+
+INTRODUCTION
+
+Star Castle Arcade is an Atari 2600 version of the classic Cinematronics 
+arcade game.   The objective of the game is simple: destroy the Star Castles, 
+collect as many points as you can, and survive for as long as possible.
+
+GAME PLAY
+
+Each Star Castle is fixed at the centre of the screen.   The castle is 
+protected by three rotating energy rings.   Each ring consists of twelve 
+segments, which can be individually destroyed when hit twice by your ship's 
+missiles.   Beware that destroying the outer ring completely will cause the 
+remaining energy rings to expand outwards, and a new inner energy ring will 
+be generated.
+
+Star Castles are defended by three homing mines, which will destroy your ship 
+on contact.   These mines will follow your ship around the screen until they 
+are destroyed, or run out of fuel.   The Star Castle will also shoot energy 
+bolts at your ship once a gap has been made through the rings.   The Star 
+Castle will be destroyed by a single missile hit on the central gun through 
+a gap in the rings.
+
+You begin the game with three ships, and an extra ship will be awarded for 
+each Star Castle that you destroy.   The Star Castles will become more and
+more aggressively defended as you progress through the game!
+
+GAME CONTROLS
+
+Plug your joystick controller into the LEFT CONTROLLER port.  Press the FIRE 
+button on the joystick to begin a new game.  During the game, hold the joystick 
+in the RIGHT or LEFT positions to rotate your ship clockwise or anti-clockwise.   
+Hold the joystick in the UP position to accelerate your ship in the direction 
+that it is facing.   Press the FIRE button on the joystick to shoot a missile 
+from the front of your ship.
+
+On an Atari 2600 console, the game can be paused by sliding the COLOR/BW 
+switch to the BW position.   The game will resume when the switch is returned 
+to the COLOR position.    On an Atari 7800 console, press the PAUSE button 
+once to pause the game, and again to resume the game.   To abandon a game 
+and return to the title screen, press the RESET switch.
+
+SCORING
+
+Points are awarded as follows:
+
+  Outer Ring - 10 points per segment destroyed.
+  Middle Ring - 20 points per segment destroyed.
+  Inner Ring - 30 points per segment destroyed.
+  Star Castle - 1440 points when destroyed, plus an extra ship.
+
+No points are awarded for destroying the homing mines.
+
+GAME OPTIONS
+
+The game colors can be switched between NTSC, PAL, and BW modes by pressing 
+the SELECT switch on the title screen.
+
+When the LEFT DIFFICULTY switch is in the B position, the game will begin 
+with the normal level of difficulty.  With the LEFT DIFFICULTY switch in 
+the A position, the game will begin at a higher level of difficulty.
+
+When the RIGHT DIFFICULTY switch is in the B position, your ship will be 
+deflected by the rings should it get too close.   With the RIGHT DIFFICULTY 
+switch in the A position, a collision with the Star Castle will destroy 
+your ship.
+
+Note that changes to the difficulty switch settings will only take effect 
+when you begin a new game.
+
+HIGH SCORE TABLE
+
+At the end of the game, you may be prompted to enter your initials into the 
+high score table.   To enter your initials, hold the joystick UP or DOWN
+to change the currently selected initial, and hold the joystick LEFT or RIGHT 
+to select the next or previous initial.   Pressing FIRE will save your initials 
+into the high score table.   
+
+There is a separate high score table for each combination of difficulty 
+switches.   The game type shown at the top of the high score table relates 
+to the following difficulty switch settings:
+
+  Game Type | Left Difficulty | Right Difficulty
+  Game 1 | B | B
+  Game 2 | A | B
+  Game 3 | B | A
+  Game 4 | A | A
+
+WARNING: The high scores are saved permanently onto the game cartridge.   
+Do not switch off the console or unplug the cart immediately after entering 
+your initials on the high score table.  Doing so may cause the saved scores 
+to become corrupt.   It is safe to switch off the console when the title 
+screen is showing.  To reset all of the saved scores, hold the joystick 
+RIGHT and then press FIRE during the AtariAge start-up screen.
+
+CREDITS
+
+Game Programming:           Chris Walton and Thomas Jentzsch
+Game Artwork:               Nathan Strum
+Sound Effects:              Ivan Machado and Thomas Jentzsch
+Title Music:                Richard 'Kulor' Armijo
+Cart Label:                 David Dries and Nathan Strum
+Cart Hardware:              Fred Quimby
+Cart Production:            Albert Yarusso
+
+Star Castle Arcade would not have been possible without the help and support of
+the great folks on AtariAge (www.atariage.com).  Star Castle Arcade may not be 
+reproduced or distributed without permission.
+

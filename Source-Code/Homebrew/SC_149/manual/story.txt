@@ -1,0 +1,166 @@
+Star Castle Arcade - The Development Story
+==========================================
+
+Every computer game has a story - this is the story of Star Castle Arcade for 
+the Atari 2600.
+
+STAR CASTLE ARCADE HISTORY
+
+The original Star Castle arcade game was released in 1980 by Cinematronics.   
+The game was designed by Tim Skelly and programmed by Scott Bodden.   Around 
+14,000 Star Castle arcade cabinets were produced, and around 150 are known to 
+still exist.    
+
+Cinematronics are probably best known for producing the cartoon games Dragons 
+Lair (1983) and Space Ace (1984).   They are also well known among arcade fans 
+for their earlier arcade games using vector display technology.    During the 
+vector era, from 1978 through 1983, Cinematronics released 15 arcade games 
+using vector display technology, including classics such as Rip Off, Armor 
+Attack, and of course Star Castle.    All of these games had nearly identical 
+circuitry, and relied on clever programming to adapt it to the requirements of 
+each game.
+
+With vector display technology, shapes are drawn directly on the tube by the 
+electron gun.   This gives vector games a very distinctive appearance, as the 
+game objects have essentially unlimited resolution.   The games have a crisp 
+analogue appearance, with smooth rotation and no jagged edges.   Unfortunately 
+vector display technology cannot easily show colour, so games like Star Castle 
+rely on colour overlays fixed to the front of the screen.   
+
+Vector games require an expensive tube and suffer from visible flicker when 
+many objects are drawn on the screen.   As a result, vector display technology 
+in the arcades was quickly replaced by raster-scan technology, which itself is 
+now being rapidly made obsolete by digital LED/LCD display technology.   For 
+Cinematronics, the vector era came to an end in 1983, and after a lengthy 
+bankruptcy the company was dismantled in 1987.
+
+The story of Star Castle on the Atari 2600 VCS begins in 1981 with Howard Scott 
+Warshaw.  While working for Atari, he was assigned the task of producing a 
+conversion of Star Castle for the VCS.   But he soon decided that a straight 
+port of the game would not be possible.   Instead, he was inspired to write 
+Yars' Revenge, which has some visual similarities to Star Castle, but very 
+different game-play.   The story of Star Castle on the VCS would end at this 
+point were it not for the efforts of enthusiasts nearly 30 years later.
+
+STAR CASTLE ON THE VCS
+
+The Atari 2600 VCS has a large catalogue of arcade ports, but there are also 
+many gaps where arcade games did not make it to the VCS.  Some of these ports 
+were planned for release on the VCS, but abandoned during the video game crash 
+of 1983.   A few of these arcade ports have since been unearthed as partially 
+completed prototypes (e.g. Turbo and Ixion), while others (e.g. Zoo Keeper) 
+remain as rumours based on magazine articles and press releases.  For games 
+like Star Castle and Tempest, porting was simply deemed too technically 
+challenging for the VCS and a direct port was not attempted.
+
+The VCS still has a large community of followers, some of whom write games for 
+the console.    These are enthusiasts who spend countless hours of their spare 
+time to keep the VCS console alive, long after its commercial shelf life has 
+expired.  Thanks to the Internet, and the AtariAge website in particular, these 
+enthusiasts often work together, though many of them will likely never meet in 
+real life.   Some are interested in filling the gaps in VCS catalogue and have 
+ported missing arcade titles, such as Ladybug, Star Fire, Colony 7, Juno First, 
+etc.  
+
+Porting an arcade title to the VCS is not a straightforward task.  The VCS is 
+a very limited platform and the arcade machines have many times more processing 
+power.   A port generally takes a minimum of a year of effort to complete.    
+The key to a successful port is capturing the essence of the arcade game within 
+the limitations of the VCS.   For Star Castle Arcade, the VCS is incapable of 
+vector graphics, but flicker is used cleverly in places to give the game the 
+look and feel of vectors.
+
+STAR CASTLE HOMEBREWS
+
+The first enthusiast-driven attempt to port across Star Castle to the VCS was 
+announced by Trogdor in December 2005, called Stellar Fortress.   His version 
+used low resolution playfield graphics to draw the rings.   New features were 
+added up to May 2008 but sadly the game was never fully playable and Trogdor 
+moved on to other projects.
+
+In August 2008, John Payson posted a demo to his blog showing that the rings 
+could be drawn using high resolution sprite graphics.  However, he did not 
+develop the demo further and moved on to other projects.  Many of the 
+techniques that were eventually used in Star Castle Arcade, such as the multi-
+colored rings, were inspired by this demo.
+
+The next attempt was in 2009 by D. Scott Williamson, a former Atari Lynx 
+programmer.   He was inspired to attempt the port, based on the story of Yars' 
+Revenge in the book Racing the Beam (2009).  He worked in secret for 
+around a year, finally revealing the completed game at the 2010 Video Game 
+Summit in Chicago.   However, he did not plan to release the game to the 
+community at this point, and encouraged other programmers to replicate his feat.
+
+A further demo of Star Castle on the VCS was posted to an AtariAge blog by 
+Thomas Jentzsch in July 2010.   He determined how D. Scott had 
+written his port, and reverse-engineered the ring-drawing technique, based 
+purely on video footage.   However, this was just for technical curiosity and 
+he did not intend to produce a full port at that time.
+
+The final attempt at a Star Castle port was started by Chris Walton in 
+December 2011.   He was also interested in the technical challenge and produced 
+a quick demo, inspired by the previous efforts.   The ring drawing code was 
+completed in around a week, and a demo posted to his AtariAge blog.   He did 
+not intend to attempt a complete port, but the community response was so 
+encouraging that he continued with the project.
+
+Over the next few months, the core game was completed and a playable version 
+was uploaded to the AtariAge website in March 2012.   Chris Walton was assisted 
+by Nathan Strum, who provided the game graphics, Ivan Machado who produced the 
+game sound effects, and Richard 'Kulor' Armijo who supplied the title music.
+The two version of Star Castle are rather different: D. Scott kept 
+within the 8K limitation common to Atari VCS games of that time.  Chris  
+used 28K and extra RAM to include features such as multi-coloured rings, 
+explosion effects, title music, a splash screen, and a high-score table.   
+
+In May 2012, D. Scott decided to start a Kickstarter project, so 
+that his game could see a limited release to the community.   The response was 
+very enthusiastic, and the funding goal was quickly reached.   He used the 
+funding to build custom circuitry and cases for the game, and released the 
+game to several hundred backers a few months later.
+
+At this point, Chris was close to completing his own Star Castle arcade 
+port, but there were blockers both technically and in real-life.   He had 
+changed to a more challenging job, and the birth of his daughter was imminent, 
+so he had little spare time to work on the game.   Also, the game had reached 
+the timing limits of the VCS and it did not seem possible to provide the game 
+with perfect collision detection.   Fortunately, at this point Thomas Jentzsch 
+stepped-in and agreed to take over the programming of the game.
+
+Together with Andrew Davie, Thomas had previously worked on a novel 
+time-slicing technique for the Boulderdash VCS port.   This technique would 
+be perfect to overcome the timing limits that were affecting Star Castle.   
+Most VCS games perform all of their calculations on every frame, 60 times a 
+second.   With time-slicing, the game calculations may be spread across several 
+frames.   However, using this technique would require an almost complete 
+rewrite of the Star Castle game code. 
+
+Undeterred by the effort required, Thomas spent the next year 
+reworking Star Castle to use an improved version of his time-slicing technique.   
+An added bonus of using time-slicing was that it allowed him to include many 
+more features from the arcade version.   The end result was a very close match 
+to the arcade version, and so the game was named "Star Castle Arcade".
+
+The story of Star Castle on the VCS ends at this point.   There are now two 
+complete VCS ports, quite different from each other.   The Star Castle Arcade 
+port took nearly 3 years to complete and was a truly international 
+collaboration:   The game code was written by Chris Walton from Scotland, and 
+Thomas Jentzsch from Germany.   The game graphics were supplied by Nathan Strum 
+from the USA.  The sound effects were devised by Ivan Machado from Brazil.   
+The Melody Cartridge on which the game is stored was designed and built by 
+Fred Quimby from the USA.   Finally, the game was packaged and released by 
+Albert Yarusso, the owner of the AtariAge website, also in the USA.   Together, 
+this group is known as Team Antonym.
+
+--
+
+Stellar Fortress - http://atariage.com/forums/topic/80748-stellar-fortress/
+
+John Payson Demo - http://atariage.com/forums/blog/142/entry-5136-star-castle-anyone/
+
+Thomas Jentzsch Demo - http://atariage.com/forums/blog/144/entry-7275-star-castle-brainstorming/
+
+Chris Walton Demo - http://atariage.com/forums/blog/107/entry-8769-star-castle-kernel/
+
+Kickstarter - http://www.kickstarter.com/projects/698159145/atari-2600-star-castle
+
